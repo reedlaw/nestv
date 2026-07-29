@@ -1,0 +1,15 @@
+category,quantity,description,initial_spec,notes
+DAC resistors,12,R elements for two 6-bit R-2R ladders,1.00 kohm 0.1%,Prefer matched networks
+DAC resistors,12,2R elements for two 6-bit R-2R ladders,2.00 kohm 0.1%,Prefer matched networks
+Amplifier,1,Multi-channel video-capable single-supply amplifier,TBD after stability/output-drive review,Buffer Y and C plus active composite sum
+Gain trim,2,Multi-turn trimmer or selectable precision network,TBD,Independent Y and C gain
+Filter,1,Luma filter component set,TBD,Socket or jumper for iteration
+Filter,1,Chroma filter component set,TBD,Socket or jumper for iteration
+Coupling capacitors,3,Video output coupling capacitors,TBD voltage and value,Confirm droop on field-rate content
+Source termination,2,Output source resistors,75 ohm 1%,One each for S-Video Y and composite
+Connector,1,4-pin mini-DIN receptacle,S-Video,Expose Y and C
+Connector,1,RCA receptacle,Composite,75-ohm video output
+Test points,6,Loop or pad test points,Raw Y filtered Y raw C filtered C sync composite,
+Decoupling,4,Local ceramic bypass capacitors,100 nF,One per amplifier supply location
+Bulk decoupling,1,Low-ESR capacitor,10 uF initial,At analog board power entry
+Interconnect,1,Short ground-paired wiring harness,12 signals plus grounds,See pin-map.csv

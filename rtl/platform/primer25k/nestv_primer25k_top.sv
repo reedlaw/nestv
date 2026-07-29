@@ -62,6 +62,21 @@ module nestv_primer25k_top (
 	logic [23:0] hdmi_rgb;
 	logic [23:0] yc_rgb;
 	logic [23:0] yc_encoded;
+	logic yc_csync;
+	logic [5:0] diagnostic_color;
+
+	always_comb begin
+		case (core.cycle[7:5])
+			3'd0: diagnostic_color = 6'h30;
+			3'd1: diagnostic_color = 6'h28;
+			3'd2: diagnostic_color = 6'h2a;
+			3'd3: diagnostic_color = 6'h2c;
+			3'd4: diagnostic_color = 6'h21;
+			3'd5: diagnostic_color = 6'h22;
+			3'd6: diagnostic_color = 6'h24;
+			default: diagnostic_color = 6'h0f;
+		endcase
+	end
 
 	// The existing SDRAM PLL supplies 3x the 21.477272 MHz NES master clock.
 	// At 64.431816 MHz, NTSC color carrier is exactly clk/18.
@@ -71,10 +86,10 @@ module nestv_primer25k_top (
 		.BURST_END(10'd222)
 	) native_video (
 		.clk(core.fclk),
-		.color(core.color),
+		.color(s1 ? diagnostic_color : core.color),
 		.cycle(core.cycle),
 		.scanline(core.scanline),
-		.overlay(core.overlay),
+		.overlay(s1 ? 1'b0 : core.overlay),
 		.overlay_color(core.overlay_color),
 		.overlay_x(),
 		.overlay_y(),
@@ -87,10 +102,15 @@ module nestv_primer25k_top (
 		.yc_encoded,
 		.yc_hsync(),
 		.yc_vsync(),
-		.yc_csync(),
+		.yc_csync,
 		.yc_de()
 	);
 
-	assign video_y = yc_encoded[15:10];
-	assign video_c = yc_encoded[23:18];
+	video_dac_quantizer dac_codes (
+		.y_in(yc_encoded[15:8]),
+		.c_in(yc_encoded[23:16]),
+		.csync(yc_csync),
+		.y_out(video_y),
+		.c_out(video_c)
+	);
 endmodule

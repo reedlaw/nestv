@@ -1,0 +1,13 @@
+signal,bit,package_pin,former_function,io_standard,drive_ma
+video_y,0,A10,controller-2 chip-select,LVCMOS33,8
+video_y,1,E10,controller-2 MOSI,LVCMOS33,8
+video_y,2,K5,controller-2 clock,LVCMOS33,8
+video_y,3,L11,controller-2 MISO,LVCMOS33,8
+video_y,4,E8,LED1,LVCMOS33,8
+video_y,5,L6,USB D+,LVCMOS33,8
+video_c,0,A11,controller-1 chip-select,LVCMOS33,8
+video_c,1,E11,controller-1 MOSI,LVCMOS33,8
+video_c,2,K11,controller-1 MISO,LVCMOS33,8
+video_c,3,L5,controller-1 clock,LVCMOS33,8
+video_c,4,D7,LED0,LVCMOS33,8
+video_c,5,K6,USB D-,LVCMOS33,8

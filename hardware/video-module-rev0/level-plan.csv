@@ -1,0 +1,5 @@
+node,sync_tip,blank_black,peak_white,notes
+digital_y_code,0,19,63,Defined by video_dac_quantizer
+ideal_r2r_fraction,0,0.301587,1.000000,Code divided by 63
+terminated_svideo_y_volts,0,0.286,1.000,Initial NTSC target
+terminated_composite_volts,0,0.286,1.000,Before adding chroma instantaneous excursion

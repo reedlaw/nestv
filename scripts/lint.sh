@@ -35,3 +35,13 @@ verilator \
 	"$root/rtl/video/nes_palette.sv" \
 	"$root/rtl/video/nestang_video_adapter.sv" \
 	"$root/sim/nestang_video/tb_nestang_video_adapter.sv"
+
+verilator \
+	--lint-only \
+	--timing \
+	--Wall \
+	-Wno-DECLFILENAME \
+	-Wno-TIMESCALEMOD \
+	-Wno-UNUSEDSIGNAL \
+	"$root/rtl/video/video_dac_quantizer.sv" \
+	"$root/sim/nestang_video/tb_video_dac_quantizer.sv"

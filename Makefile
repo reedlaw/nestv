@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: all bootstrap lint test test-m2 model-test check wave wave-open export-yc validate-m1 validate-m2 synth-primer25k clean
+.PHONY: all bootstrap lint test test-m2 test-m4 model-test check wave wave-open export-yc validate-m1 validate-m2 synth-primer25k clean
 
 all: check
 
@@ -16,10 +16,13 @@ test: bootstrap
 test-m2: bootstrap
 	./scripts/sim_m2.sh
 
+test-m4:
+	./scripts/sim_m4.sh
+
 model-test:
 	python3 scripts/model_test.py
 
-check: lint test test-m2 model-test
+check: lint test test-m2 test-m4 model-test
 
 wave: bootstrap
 	./scripts/wave.sh

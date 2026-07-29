@@ -1,0 +1,41 @@
+pin,signal,direction_at_module,required_rev0,description
+1,GND,power,yes,Digital return
+2,3V3_IO,power,yes,Logic reference and optional low-current logic supply
+3,Y0,input,yes,Luma DAC least-significant bit
+4,Y1,input,yes,Luma DAC bit 1
+5,GND,power,yes,Digital return
+6,Y2,input,yes,Luma DAC bit 2
+7,Y3,input,yes,Luma DAC bit 3
+8,GND,power,yes,Digital return
+9,Y4,input,yes,Luma DAC bit 4
+10,Y5,input,yes,Luma DAC most-significant active bit
+11,GND,power,yes,Digital return
+12,Y6,input,no,Reserved luma precision bit
+13,Y7,input,no,Reserved luma precision bit
+14,GND,power,yes,Digital return
+15,C0,input,yes,Chroma DAC least-significant bit
+16,C1,input,yes,Chroma DAC bit 1
+17,GND,power,yes,Digital return
+18,C2,input,yes,Chroma DAC bit 2
+19,C3,input,yes,Chroma DAC bit 3
+20,GND,power,yes,Digital return
+21,C4,input,yes,Chroma DAC bit 4
+22,C5,input,yes,Chroma DAC most-significant active bit
+23,GND,power,yes,Digital return
+24,C6,input,no,Reserved chroma precision bit
+25,C7,input,no,Reserved chroma precision bit
+26,GND,power,yes,Digital return
+27,SAMPLE_CLK,input,no,Reserved synchronous sample clock
+28,CSYNC,input,no,Debug or future module-side sync processing
+29,GND,power,yes,Clock return
+30,DE,input,no,Native data enable
+31,VIDEO_ENABLE,input,yes,Active-high analog-output enable and mute release
+32,MOD_PRESENT_N,output,yes,Module straps this pin to ground
+33,GND,power,yes,Control return
+34,MOD_ID_SCL,input,no,Reserved 3.3 V module-identification I2C clock
+35,MOD_ID_SDA,bidirectional,no,Reserved 3.3 V module-identification I2C data
+36,GND,power,yes,Control return
+37,5V_A,power,yes,Analog input supply
+38,5V_A,power,yes,Parallel analog input supply pin
+39,GND,power,yes,Analog supply return
+40,GND,power,yes,Analog supply return

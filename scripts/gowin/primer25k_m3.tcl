@@ -31,6 +31,7 @@ foreach file [glob \
 add_file build/upstream/yc_out.sv
 add_file rtl/video/nes_palette.sv
 add_file rtl/video/nestang_video_adapter.sv
+add_file rtl/video/video_dac_quantizer.sv
 
 set_option -synthesis_tool gowinsynthesis
 set_option -top_module nestv_primer25k_top
