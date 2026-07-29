@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install Verilator
-        run: sudo apt-get update && sudo apt-get install --yes verilator
+      - name: Install simulation dependencies
+        run: sudo apt-get update && sudo apt-get install --yes python3-numpy verilator
       - name: Lint and simulate
         run: make check

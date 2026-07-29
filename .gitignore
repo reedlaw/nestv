@@ -4,3 +4,5 @@
 /Gowin_V*_linux.tar.gz
 *.vcd
 *.fst
+__pycache__/
+*.pyc

@@ -10,6 +10,7 @@ The engineering plan and milestone definitions live in [PROJECT.md](PROJECT.md).
 - GNU Make
 - `curl` and `sha256sum`
 - Verilator 5 or newer
+- Python 3 with NumPy
 - Gowin EDA 1.9.12.03 for FPGA synthesis (not required for tests)
 
 ## Quick start
@@ -27,6 +28,9 @@ Useful targets:
 ```sh
 make lint             # Verilator lint
 make test             # standalone yc_out simulation
+make wave             # generate an FST waveform for GTKWave
+make wave-open        # generate and open the waveform
+make validate-m1      # export Y/C, decode frames, compare 6/8-bit DACs
 make synth-primer25k  # reproducible Gowin entry point
 make clean
 ```
