@@ -18,6 +18,7 @@ module tb_nestang_video_adapter;
 	nestang_video_adapter dut (.*);
 
 	task automatic check_split;
+		@(posedge clk);
 		#1;
 		assert (hdmi_rgb === yc_rgb)
 			else $fatal(1, "video branches differ: %h != %h", hdmi_rgb, yc_rgb);

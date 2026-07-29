@@ -1,6 +1,10 @@
 // Native NESTang video fan-out. The analog branch never reads the HDMI
 // framebuffer: both consumers receive the same palette/overlay result here.
-module nestang_video_adapter (
+module nestang_video_adapter #(
+	parameter logic [39:0] PHASE_INC = 40'h1555_5555_55,
+	parameter logic [6:0]  BURST_START = 7'd40,
+	parameter logic [9:0]  BURST_END = 10'd148
+) (
 	input  logic        clk,
 	input  logic [5:0]  color,
 	input  logic [8:0]  cycle,
@@ -23,6 +27,7 @@ module nestang_video_adapter (
 );
 	logic [23:0] palette_rgb;
 	logic [23:0] overlay_rgb;
+	logic [23:0] source_rgb;
 
 	nes_palette palette (
 		.color(color),
@@ -45,16 +50,22 @@ module nestang_video_adapter (
 			overlay_color[9:5], overlay_color[9:7],
 			overlay_color[14:10], overlay_color[14:12]
 		};
-		hdmi_rgb = native_de ? (overlay ? overlay_rgb : palette_rgb) : 24'h000000;
-		yc_rgb = hdmi_rgb;
+		source_rgb = native_de ? (overlay ? overlay_rgb : palette_rgb) : 24'h000000;
+	end
+
+	// This register is the clock-domain boundary from the 21.477 MHz NES core
+	// into the 64.432 MHz encoder clock. Both branches are registered together.
+	always_ff @(posedge clk) begin
+		hdmi_rgb <= source_rgb;
+		yc_rgb <= source_rgb;
 	end
 
 	yc_out encoder (
 		.clk(clk),
-		.PHASE_INC(40'h1555_5555_55),
+		.PHASE_INC(PHASE_INC),
 		.PAL_EN(1'b0),
 		.CVBS(1'b0),
-		.COLORBURST_RANGE({7'd40, 10'd148}),
+		.COLORBURST_RANGE({BURST_START, BURST_END}),
 		.hsync(native_hsync),
 		.vsync(native_vsync),
 		.csync(native_csync),
