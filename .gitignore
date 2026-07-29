@@ -1,0 +1,6 @@
+/build/
+/impl/
+/.tools/
+/Gowin_V*_linux.tar.gz
+*.vcd
+*.fst

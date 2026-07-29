@@ -1,0 +1,3 @@
+// M0 performs a resource and syntax synthesis of yc_out only. Physical DAC,
+// clock, and video pins are intentionally unassigned until the M3 pinout is
+// selected and reviewed against the Primer 25K I/O-bank voltages.
