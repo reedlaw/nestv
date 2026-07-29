@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: all bootstrap lint test model-test check wave wave-open export-yc validate-m1 synth-primer25k clean
+.PHONY: all bootstrap lint test test-m2 model-test check wave wave-open export-yc validate-m1 validate-m2 synth-primer25k clean
 
 all: check
 
@@ -13,10 +13,13 @@ lint: bootstrap
 test: bootstrap
 	./scripts/sim.sh
 
+test-m2: bootstrap
+	./scripts/sim_m2.sh
+
 model-test:
 	python3 scripts/model_test.py
 
-check: lint test model-test
+check: lint test test-m2 model-test
 
 wave: bootstrap
 	./scripts/wave.sh
@@ -31,6 +34,8 @@ validate-m1: export-yc
 	python3 scripts/render_composite.py \
 		--input build/vectors/yc_out.csv \
 		--output-dir build/m1
+
+validate-m2: test-m2
 
 synth-primer25k: bootstrap
 	./scripts/synth_primer25k.sh

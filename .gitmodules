@@ -1,0 +1,3 @@
+[submodule "rtl/core/nestang"]
+	path = rtl/core/nestang
+	url = https://github.com/nand2mario/nestang.git
