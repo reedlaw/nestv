@@ -48,6 +48,13 @@ The product is not merely an inexpensive FPGA board. Its differentiator is an in
 - **HDMI:** retain the existing HDMI path during development and preferably in the final product.
 - **Storage:** internal microSD is the baseline. User-facing USB mass storage is not required.
 - **Development order:** simulation and synthesis first, dev-board analog prototype second, custom carrier PCB third.
+- **Boot and menu UX:** cold boot launches the last successfully selected game; the normal NES bitstream contains its controller-operated overlay menu rather than requiring a separate monitor-core round trip.
+- **System controls:** a long `Select + Start` gesture opens the menu, with long-press Reset as the front-panel fallback.
+- **Power UX:** target soft power and warm suspend with video disabled; retain a cold-standby path pending carrier power measurements.
+- **Save states:** persistent save states are a stretch goal. Baseline warm suspend retains a session only while standby power remains available.
+
+The detailed behavior and implementation boundaries are recorded in
+[`docs/boot-menu-suspend.md`](docs/boot-menu-suspend.md).
 
 ### Not yet settled
 
@@ -813,8 +820,11 @@ The capture device must not be treated as the authority for CRT compatibility.
 - internal microSD replaces normal dependence on external USB storage;
 - recovery and provisioning flow demonstrated;
 - menu and game loading work without HDMI.
+- normal NES startup bypasses the separate monitor core and launches the last successfully selected game;
+- long `Select + Start` and long-press Reset open the in-core menu without requiring a nonstandard controller;
+- clock-gated suspend and video/audio blanking behavior are demonstrated on the development platform.
 
-**Exit:** standalone console workflow operates entirely through composite and NES controllers.
+**Exit:** standalone console workflow operates entirely through composite and NES controllers, including last-game boot and non-persistent suspend/resume.
 
 ### M6 — Carrier revision A
 

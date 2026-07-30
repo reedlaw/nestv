@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: all bootstrap lint test test-m2 test-m4 model-test check wave wave-open export-yc validate-m1 validate-m2 synth-primer25k clean
+.PHONY: all bootstrap lint test test-m2 test-m4 model-test menu-test check wave wave-open export-yc validate-m1 validate-m2 preview-menu synth-primer25k clean
 
 all: check
 
@@ -22,7 +22,10 @@ test-m4:
 model-test:
 	python3 scripts/model_test.py
 
-check: lint test test-m2 test-m4 model-test
+menu-test:
+	python3 scripts/menu_preview_test.py
+
+check: lint test test-m2 test-m4 model-test menu-test
 
 wave: bootstrap
 	./scripts/wave.sh
@@ -39,6 +42,9 @@ validate-m1: export-yc
 		--output-dir build/m1
 
 validate-m2: test-m2
+
+preview-menu:
+	python3 scripts/preview_menu.py
 
 synth-primer25k: bootstrap
 	./scripts/synth_primer25k.sh
