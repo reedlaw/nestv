@@ -1,3 +1,6 @@
 [submodule "rtl/core/nestang"]
 	path = rtl/core/nestang
 	url = https://github.com/nand2mario/nestang.git
+[submodule "firmware/tangcore"]
+	path = firmware/tangcore
+	url = https://github.com/nand2mario/tangcore.git

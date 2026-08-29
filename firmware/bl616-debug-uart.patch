@@ -1,0 +1,579 @@
+From df4f25de985674f416e2dea68b1c36457eb1bd01 Mon Sep 17 00:00:00 2001
+From: Reed Law <reedlaw@gmail.com>
+Date: Sat, 29 Aug 2026 10:11:54 -0400
+Subject: [PATCH] Add J7 diagnostic UART for Tang Primer 25K bring-up
+
+The Primer 25K Dock exposes no UART: J7 carries JTAG only, and the
+BL616<->FPGA link on B3/C3 reaches no header. That left no way to see why
+TangCore stopped during boot, since its status messages go to an overlay
+that only exists once the FPGA is programmed.
+
+Bit-bang 9600 8N1 on J7 pin 2 (JTAG TDI / GPIO3), mirroring overlay_status(),
+dprint() and printf(). GPIO3 is reassigned to TDI while the MCU programs the
+FPGA, so output is buffered across that interval and flushed by
+disable_jtag_pins().
+
+debug_uart_task drains the buffer, but it is not created until three lines
+before vTaskStartScheduler(). Everything logged during init -- board_init,
+SDH, usbh_initialize -- would otherwise never reach the wire, and a hang
+anywhere in that sequence would be indistinguishable from a dead UART. So
+also transmit synchronously while the scheduler has not started.
+
+Consecutive identical lines collapse to one plus a repeat count, because
+main_task re-emits "core_id=-1" about five times a second while no core
+answers, and the heartbeat drops to 10 s. Both keep the boot messages
+readable on a small serial display.
+
+Three build-time test modes, all off by default:
+  DEBUG_UART_SOAK       continuous 0x00 frames; a multimeter reads ~0.3 V
+                        against 3.3 V idle, proving the transmit path
+  DEBUG_UART_SWEEP      walks the bit period, one letter per candidate
+  DEBUG_UART_CALIBRATE  times the bit delay with interrupts on and off
+
+Measured on hardware: the bit period is ~104.6 us (~9560 baud), and
+bflb_mtimer_delay_us() behaves identically with interrupts enabled and
+disabled. A 3000 mtimer-ms marker takes ~4.6 real seconds, confirming the
+40/26 clock ratio DEBUG_UART_BIT_US is derived from.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016oqomAUz6WC3hwiRMszouo
+---
+ DEBUG_UART.md        |  24 ++++
+ fpga/programmer.cpp  |   3 +
+ main.cpp             |  28 +++-
+ ui/overlay.cpp       |   4 +-
+ utils/debug_uart.cpp | 311 +++++++++++++++++++++++++++++++++++++++++++
+ utils/debug_uart.h   |  16 +++
+ utils/init.cpp       |   4 +
+ 7 files changed, 387 insertions(+), 3 deletions(-)
+ create mode 100644 DEBUG_UART.md
+ create mode 100644 utils/debug_uart.cpp
+ create mode 100644 utils/debug_uart.h
+
+diff --git a/DEBUG_UART.md b/DEBUG_UART.md
+new file mode 100644
+index 0000000..f402a06
+--- /dev/null
++++ b/DEBUG_UART.md
+@@ -0,0 +1,24 @@
++# Tang Primer 25K J7 diagnostic UART
++
++This diagnostic build mirrors TangCore status messages and SDK `printf` output
++to **J7 pin 2** (JTAG TDI / BL616 GPIO3) at **9600 baud, 8 data bits, no
++parity, 1 stop bit**.
++
++Connect only:
++
++- J7 pin 2 -> serial adapter RX
++- J7 pin 6 -> serial adapter GND
++
++Do not connect the adapter's TX, 3.3 V, or 5 V pins. J7 pin 4 is 5 V and J7
++pin 7 is 3.3 V; neither is needed for receiving logs.
++
++GPIO3 is reassigned to JTAG TDI while the MCU programs the FPGA. UART output is
++buffered during that interval and emitted after JTAG releases the pin, so a
++short silent interval during FPGA programming is expected.
++
++The packaged Flash Cube configuration is
++`build/tangcore/firmware/flash_primer25k_debug_uart.ini`. It does not program
++address `0x0`; it places only the custom TangCore application at its normal
++`0x40000` address. The original
++`flash_primer25k.ini` and `tangcore_primer25k.bin` are unchanged and provide the
++recovery path.
+diff --git a/fpga/programmer.cpp b/fpga/programmer.cpp
+index e6a4ce5..a12cc64 100644
+--- a/fpga/programmer.cpp
++++ b/fpga/programmer.cpp
+@@ -15,6 +15,7 @@
+ #include "task.h"
+ #include "utils.h"
+ #include "overlay.h"
++#include "debug_uart.h"
+ 
+ #define JTAG_MAX_CHAIN 8
+ 
+@@ -929,6 +930,7 @@ void fpgaReset() {
+ }
+ 
+ void enable_jtag_pins(void) {
++    debug_uart_suspend();
+     // JTAG pins
+     bflb_gpio_init(gpio_dev, GPIO_PIN_JTAG_TMS, GPIO_OUTPUT | GPIO_FLOAT | GPIO_SMT_EN | GPIO_DRV_3);
+     bflb_gpio_init(gpio_dev, GPIO_PIN_JTAG_TCK, GPIO_OUTPUT | GPIO_FLOAT | GPIO_SMT_EN | GPIO_DRV_3);
+@@ -941,6 +943,7 @@ void disable_jtag_pins(void) {
+     bflb_gpio_deinit(gpio_dev, GPIO_PIN_JTAG_TCK);
+     bflb_gpio_deinit(gpio_dev, GPIO_PIN_JTAG_TDI);
+     bflb_gpio_deinit(gpio_dev, GPIO_PIN_JTAG_TDO);
++    debug_uart_resume();
+ }
+ 
+ /////////////// top programming functions ///////////////
+diff --git a/main.cpp b/main.cpp
+index e349734..a534a63 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -32,6 +32,7 @@ extern "C" {
+ #include "cores.h"
+ #include "overlay.h"
+ #include "init.h"
++#include "debug_uart.h"
+ #include "menu_manager.h"
+ 
+ // Uncomment this to enable UART console (use with caution. it may interfere with MCU-FPGA communication)
+@@ -57,6 +58,25 @@ const char *drv = "sd:";
+ // Tasks and shared state
+ TaskHandle_t main_task_handle;
+ TaskHandle_t uart1_rx_task_handle;
++TaskHandle_t debug_uart_task_handle;
++
++static void debug_uart_task(void *)
++{
++    unsigned heartbeat = 0;
++    uint64_t next_heartbeat = bflb_mtimer_get_time_ms();
++    while (1) {
++        uint64_t now = bflb_mtimer_get_time_ms();
++        if (now >= next_heartbeat) {
++            char message[64];
++            snprintf(message, sizeof(message), "[debug] heartbeat %u", heartbeat++);
++            debug_uart_log(message);
++            next_heartbeat = now + 10000;
++        }
++        if (!debug_uart_drain_one()) {
++            delay(1);
++        }
++    }
++}
+ 
+ #ifdef TANG_CONSOLE60K
+ const char *BOARD_NAME = "console60k";
+@@ -78,6 +98,7 @@ const char *BOARD_NAME = "unknown";
+ int __attribute__((weak)) putchar(int ch) {
+     fpga_tx_header(0x05, 2);
+     fpga_tx_byte(ch);
++    debug_uart_putchar(ch);
+     return ch;
+ }
+ 
+@@ -396,13 +417,13 @@ static void main_task(void *pvParameters)
+     if (res == FR_OK) {
+         overlay_status("SD card mounted in %d ms", bflb_mtimer_get_time_ms() - start);
+     } else  {
+-        overlay_status("SD not found. Mounting USB...");
++        overlay_status("SD mount failed (%d). USB...", res);
+         drv = "usb:";
+         start = bflb_mtimer_get_time_ms();
+         while ((res = f_mount(&fs, "usb:", 1)) != FR_OK && bflb_mtimer_get_time_ms() - start < 2000)
+             delay(100);
+         if (res != FR_OK) {
+-            overlay_status("Failed to mount USB drive");
++            overlay_status("USB mount failed (FRESULT=%d)", res);
+         } else {
+             overlay_status("USB drive mounted in %d ms", bflb_mtimer_get_time_ms() - start);
+         }
+@@ -582,6 +603,9 @@ int main(void)
+     // Create the tasks
+     xTaskCreate(main_task, "main_task", MAIN_TASK_STACK_SIZE, NULL, MAIN_TASK_PRIORITY, &main_task_handle);
+     xTaskCreate(uart1_rx_task, "uart1_rx_task", UART1_RX_TASK_STACK_SIZE, NULL, UART1_RX_TASK_PRIORITY, &uart1_rx_task_handle);
++#ifdef TANG_PRIMER25K
++    xTaskCreate(debug_uart_task, "debug_uart", 512, NULL, 1, &debug_uart_task_handle);
++#endif
+     
+     vTaskStartScheduler();
+ 
+diff --git a/ui/overlay.cpp b/ui/overlay.cpp
+index 87700e4..835a1bf 100644
+--- a/ui/overlay.cpp
++++ b/ui/overlay.cpp
+@@ -8,6 +8,7 @@ extern "C" {
+ }
+ #include "utils.h"
+ #include "overlay.h"
++#include "debug_uart.h"
+ 
+ /////////////////////////////////////////////////////////////////////////////////
+ // Overlay and other core control over UART
+@@ -42,6 +43,7 @@ void dprint(const char *fmt, ...) {
+         fpga_tx_byte(buf[i]);
+     }
+     taskEXIT_CRITICAL();
++    debug_uart_log(buf);
+ }
+ 
+ void overlay_printf(const char *fmt, ...) {
+@@ -84,6 +86,7 @@ void overlay_status(const char *fmt, ...) {
+         fpga_tx_byte(buf[i]);
+     }
+     taskEXIT_CRITICAL();
++    debug_uart_log(buf);
+ }
+ 
+ // show a pop-up message, press any key to discard (caller needs to redraw screen)
+@@ -160,4 +163,3 @@ void overlay(int state) {
+     fpga_tx_byte(state);        
+     taskEXIT_CRITICAL();
+ }
+-
+diff --git a/utils/debug_uart.cpp b/utils/debug_uart.cpp
+new file mode 100644
+index 0000000..ab1b711
+--- /dev/null
++++ b/utils/debug_uart.cpp
+@@ -0,0 +1,311 @@
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++extern "C" {
++#include "bflb_gpio.h"
++#include "bflb_irq.h"
++#include "bflb_mtimer.h"
++#include "board.h"
++}
++
++#include "FreeRTOS.h"
++#include "task.h"
++
++#include "debug_uart.h"
++#include "utils.h"
++
++#ifdef TANG_PRIMER25K
++
++namespace {
++
++// The Primer has a 26 MHz crystal, while this SDK configures mtimer as if it
++// were 40 MHz. A requested delay therefore lasts 40/26 times as long. Request
++// 68 timer "microseconds" to produce a physical 104.6 us bit (about 9559 baud).
++uint32_t debug_uart_bit_us = 68;
++
++// Soak: multimeter-readable pattern. Confirmed working 2026-08-29, so off.
++#define DEBUG_UART_SOAK 0
++
++// Sweep: walk the bit period across candidates, sending a different letter at
++// each, so a listener fixed at 9600 reveals which period is actually 9600.
++#define DEBUG_UART_SWEEP 0
++#define SWEEP_FIRST_US   40
++#define SWEEP_STEP_US     5
++#define SWEEP_STEPS      15
++
++// Calibration: time the delay the UART actually uses, with interrupts enabled
++// and then disabled exactly as transmit_byte() does it.
++#define DEBUG_UART_CALIBRATE 0
++#define CAL_CALLS 73530u   /* nominal 5 s if one call really costs 68 us */
++constexpr size_t DEBUG_BUFFER_SIZE = 4096;
++
++char debug_buffer[DEBUG_BUFFER_SIZE];
++size_t debug_buffer_read;
++size_t debug_buffer_write;
++bool debug_uart_active;
++bool debug_buffer_overflowed;
++
++void transmit_byte(uint8_t value)
++{
++    uintptr_t flags = bflb_irq_save();
++    bflb_gpio_reset(gpio_dev, GPIO_PIN_JTAG_TDI); // Start bit.
++    bflb_mtimer_delay_us(debug_uart_bit_us);
++    for (unsigned bit = 0; bit < 8; ++bit) {
++        if (value & (1U << bit)) {
++            bflb_gpio_set(gpio_dev, GPIO_PIN_JTAG_TDI);
++        } else {
++            bflb_gpio_reset(gpio_dev, GPIO_PIN_JTAG_TDI);
++        }
++        bflb_mtimer_delay_us(debug_uart_bit_us);
++    }
++    bflb_gpio_set(gpio_dev, GPIO_PIN_JTAG_TDI); // Stop bit / idle.
++    bflb_mtimer_delay_us(debug_uart_bit_us);
++    bflb_irq_restore(flags);
++}
++
++void buffer_bytes(const char *data, size_t length)
++{
++    uintptr_t flags = bflb_irq_save();
++    for (size_t i = 0; i < length; ++i) {
++        size_t next = (debug_buffer_write + 1) % DEBUG_BUFFER_SIZE;
++        if (next == debug_buffer_read) {
++            debug_buffer_overflowed = true;
++            break;
++        }
++        debug_buffer[debug_buffer_write] = data[i];
++        debug_buffer_write = next;
++    }
++    bflb_irq_restore(flags);
++}
++
++char last_message[96];
++unsigned repeat_count;
++
++void emit_repeat_notice(void)
++{
++    if (repeat_count == 0) {
++        return;
++    }
++    char note[48];
++    int n = snprintf(note, sizeof(note), "  ... x%u\r\n", repeat_count + 1);
++    repeat_count = 0;
++    if (n > 0) {
++        buffer_bytes(note, (size_t)n);
++    }
++}
++
++void configure_tx_pin(void)
++{
++    bflb_gpio_init(gpio_dev, GPIO_PIN_JTAG_TDI,
++                   GPIO_OUTPUT | GPIO_FLOAT | GPIO_SMT_EN | GPIO_DRV_3);
++    bflb_gpio_set(gpio_dev, GPIO_PIN_JTAG_TDI);
++}
++
++// debug_uart_task is what normally drains the buffer, but it does not exist
++// until xTaskCreate() runs near the end of main(). Anything logged before the
++// scheduler starts -- including every message from usbh_initialize() and the
++// rest of init -- would otherwise sit in RAM and never reach the wire, and a
++// hang anywhere in that sequence would look identical to a dead UART. While
++// the scheduler is not running there is nothing to starve, so just transmit
++// synchronously.
++void flush_if_scheduler_stopped(void)
++{
++    if (!debug_uart_active) {
++        return;
++    }
++    if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
++        return;
++    }
++    while (debug_uart_drain_one()) {
++    }
++}
++
++} // namespace
++
++// Drive a pattern slow enough to read on a multimeter, using the real transmit
++// path rather than a plain GPIO write. A continuous stream of 0x00 frames is
++// low for 9 of every 10 bit times, so J7 pin 2 averages about 0.3 V; the idle
++// half of each cycle sits at 3.3 V. Three cycles of roughly 3 s each.
++//
++//   swings 0.3 V <-> 3.3 V  -> the software UART transmits; suspect the link
++//   stays at 3.3 V          -> the transmit path never drives the pin
++void debug_uart_soak(void)
++{
++    if (!debug_uart_active) {
++        return;
++    }
++    for (unsigned cycle = 0; cycle < 3; ++cycle) {
++        uint64_t end = bflb_mtimer_get_time_ms() + 2000;
++        while (bflb_mtimer_get_time_ms() < end) {
++            transmit_byte(0x00);
++        }
++        bflb_gpio_set(gpio_dev, GPIO_PIN_JTAG_TDI);
++        end = bflb_mtimer_get_time_ms() + 2000;
++        while (bflb_mtimer_get_time_ms() < end) {
++        }
++    }
++}
++
++// Send 'A' at SWEEP_FIRST_US, 'B' one step slower, and so on. The listener
++// stays at 9600 throughout; whichever letter arrives cleanly identifies the bit
++// period that really is 9600 on this board, overhead and clock ratio included.
++void debug_uart_sweep(void)
++{
++    const uint32_t saved = debug_uart_bit_us;
++    for (unsigned step = 0; step < SWEEP_STEPS; ++step) {
++        debug_uart_bit_us = SWEEP_FIRST_US + step * SWEEP_STEP_US;
++        const uint8_t letter = 'A' + step;
++        uint64_t end = bflb_mtimer_get_time_ms() + 1500;
++        while (bflb_mtimer_get_time_ms() < end) {
++            transmit_byte(letter);
++        }
++        debug_uart_bit_us = saved;
++        bflb_gpio_set(gpio_dev, GPIO_PIN_JTAG_TDI);
++        end = bflb_mtimer_get_time_ms() + 400;   // gap between steps
++        while (bflb_mtimer_get_time_ms() < end) {
++        }
++    }
++    debug_uart_bit_us = saved;
++}
++
++// Square wave on J7 pin 2 whose half-period is CAL_CALLS delay calls. Phase 1
++// runs them with interrupts enabled, phase 2 in batches of ten inside
++// bflb_irq_save(), the way transmit_byte() sends a frame. Separated by a 3 s
++// idle-high marker. Time a half-period in each phase; then
++//    real bit period (us) = half_period_seconds * 1e6 / CAL_CALLS
++// A phase 2 that races past phase 1 means the delay does not work with
++// interrupts off, which would put the real baud far above anything sweepable.
++void debug_uart_calibrate(void)
++{
++    for (unsigned phase = 0; phase < 2; ++phase) {
++        bflb_gpio_reset(gpio_dev, GPIO_PIN_JTAG_TDI);
++        for (unsigned half = 0; half < 4; ++half) {
++            if (phase == 0) {
++                for (unsigned i = 0; i < CAL_CALLS; ++i) {
++                    bflb_mtimer_delay_us(debug_uart_bit_us);
++                }
++            } else {
++                for (unsigned i = 0; i < CAL_CALLS / 10; ++i) {
++                    uintptr_t flags = bflb_irq_save();
++                    for (unsigned bit = 0; bit < 10; ++bit) {
++                        bflb_mtimer_delay_us(debug_uart_bit_us);
++                    }
++                    bflb_irq_restore(flags);
++                }
++            }
++            if (half & 1) {
++                bflb_gpio_reset(gpio_dev, GPIO_PIN_JTAG_TDI);
++            } else {
++                bflb_gpio_set(gpio_dev, GPIO_PIN_JTAG_TDI);
++            }
++        }
++        bflb_gpio_set(gpio_dev, GPIO_PIN_JTAG_TDI);
++        uint64_t end = bflb_mtimer_get_time_ms() + 3000;
++        while (bflb_mtimer_get_time_ms() < end) {
++        }
++    }
++}
++
++void debug_uart_init(void)
++{
++    configure_tx_pin();
++    debug_uart_active = true;
++#if DEBUG_UART_CALIBRATE
++    debug_uart_calibrate();
++#endif
++#if DEBUG_UART_SOAK
++    debug_uart_soak();
++#endif
++#if DEBUG_UART_SWEEP
++    debug_uart_sweep();
++#endif
++    debug_uart_log("[debug] J7 pin 2 software UART TX ready: 9600 8N1");
++}
++
++void debug_uart_suspend(void)
++{
++    if (!debug_uart_active) {
++        return;
++    }
++    debug_uart_active = false;
++    bflb_gpio_deinit(gpio_dev, GPIO_PIN_JTAG_TDI);
++}
++
++void debug_uart_resume(void)
++{
++    configure_tx_pin();
++    debug_uart_active = true;
++
++    if (debug_buffer_overflowed) {
++        static const char warning[] = "[debug] buffered output truncated\r\n";
++        buffer_bytes(warning, sizeof(warning) - 1);
++        debug_buffer_overflowed = false;
++    }
++}
++
++void debug_uart_putchar(char character)
++{
++    buffer_bytes(&character, 1);
++    flush_if_scheduler_stopped();
++}
++
++void debug_uart_log(const char *message)
++{
++    if (message == nullptr) {
++        return;
++    }
++
++    // main_task re-emits "core_id=-1" about five times a second while no core
++    // answers, which scrolls everything else off a small display. Collapse runs
++    // of identical lines into one plus a count.
++    if (strncmp(message, last_message, sizeof(last_message) - 1) == 0) {
++        if (repeat_count < 65535u) {
++            repeat_count++;
++        }
++        return;
++    }
++    emit_repeat_notice();
++    strncpy(last_message, message, sizeof(last_message) - 1);
++    last_message[sizeof(last_message) - 1] = '\0';
++
++    const size_t length = strlen(message);
++    const bool needs_newline = length == 0 || message[length - 1] != '\n';
++    buffer_bytes(message, length);
++    if (needs_newline) {
++        buffer_bytes("\r\n", 2);
++    }
++    flush_if_scheduler_stopped();
++}
++
++bool debug_uart_drain_one(void)
++{
++    if (!debug_uart_active) {
++        return false;
++    }
++
++    uintptr_t flags = bflb_irq_save();
++    if (debug_buffer_read == debug_buffer_write) {
++        bflb_irq_restore(flags);
++        return false;
++    }
++    uint8_t value = debug_buffer[debug_buffer_read];
++    debug_buffer_read = (debug_buffer_read + 1) % DEBUG_BUFFER_SIZE;
++    bflb_irq_restore(flags);
++    transmit_byte(value);
++    return true;
++}
++
++#else
++
++void debug_uart_init(void) {}
++void debug_uart_suspend(void) {}
++void debug_uart_resume(void) {}
++void debug_uart_putchar(char) {}
++void debug_uart_log(const char *) {}
++bool debug_uart_drain_one(void) { return false; }
++void debug_uart_soak(void) {}
++void debug_uart_calibrate(void) {}
++
++#endif
+diff --git a/utils/debug_uart.h b/utils/debug_uart.h
+new file mode 100644
+index 0000000..abd37ec
+--- /dev/null
++++ b/utils/debug_uart.h
+@@ -0,0 +1,16 @@
++#pragma once
++
++// Primer 25K diagnostic output on J7 pin 2 (JTAG TDI / BL616 GPIO3).
++// Output is 9600 8N1. It is suspended while GPIO3 is needed for FPGA JTAG.
++void debug_uart_init(void);
++void debug_uart_suspend(void);
++void debug_uart_resume(void);
++void debug_uart_putchar(char character);
++void debug_uart_log(const char *message);
++bool debug_uart_drain_one(void);
++
++// Multimeter-readable transmit test on J7 pin 2; see the implementation.
++void debug_uart_soak(void);
++
++// Times the bit delay with interrupts on and off; see the implementation.
++void debug_uart_calibrate(void);
+diff --git a/utils/init.cpp b/utils/init.cpp
+index becf15b..5acac39 100644
+--- a/utils/init.cpp
++++ b/utils/init.cpp
+@@ -5,6 +5,7 @@ extern "C" {
+ 
+ #include "utils.h"
+ #include "init.h"
++#include "debug_uart.h"
+ 
+ extern "C" void bflb_uart_set_console(struct bflb_device_s *dev);
+ 
+@@ -83,6 +84,9 @@ void init_gpio_and_uart() {
+     *reg_gpio_tdo = GPIO_HIGH_Z;
+     *reg_gpio_tdi = GPIO_HIGH_Z;
+ 
++    // On Primer 25K, expose diagnostic TX on J7 pin 2 whenever TDI is idle.
++    debug_uart_init();
++
+     // Initialize SD pins
+     board_sdh_gpio_init();
+     // bflb_gpio_init(gpio, GPIO_PIN_10, GPIO_FUNC_SDH | GPIO_ALTERNATE | GPIO_PULLUP | GPIO_SMT_EN | GPIO_DRV_2);  // D1
+-- 
+2.55.0
+

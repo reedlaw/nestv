@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: all bootstrap lint test test-m2 test-m4 model-test menu-test check wave wave-open export-yc validate-m1 validate-m2 preview-menu synth-primer25k clean
+.PHONY: all bootstrap lint test test-m2 test-m4 model-test menu-test check wave wave-open export-yc validate-m1 validate-m2 preview-menu synth-primer25k program-sram tangcore-fetch tangcore-flash tangcore-flash-debug clean
 
 all: check
 
@@ -48,6 +48,18 @@ preview-menu:
 
 synth-primer25k: bootstrap
 	./scripts/synth_primer25k.sh
+
+program-sram:
+	./scripts/program_sram.sh
+
+tangcore-fetch:
+	./scripts/fetch_tangcore_release.sh
+
+tangcore-flash: tangcore-fetch
+	./scripts/flash_bl616_tangcore.sh
+
+tangcore-flash-debug: tangcore-fetch
+	APP=debug ./scripts/flash_bl616_tangcore.sh
 
 clean:
 	rm -rf build

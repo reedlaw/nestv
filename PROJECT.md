@@ -2,9 +2,12 @@
 
 Engineering plan for an affordable FPGA-based retro console with native 240p composite video for consumer CRT televisions.
 
-**Status:** Architecture revision in progress. No production hardware has been purchased. The next phase is simulation, synthesis, and development-board validation.
+**Status:** Development-board bring-up is in progress on real Tang Primer 25K
+hardware. M0–M3 are hardware-validated and M5 (TangCore integration) is in
+progress. See `docs/bringup.md` for current status against the milestone list
+in §14 and `docs/decision-log.md` for decisions and corrections.
 
-**Document date:** 2026-07-29
+**Document date:** 2026-07-29 (see `docs/bringup.md` for status updates since this date)
 
 ---
 
