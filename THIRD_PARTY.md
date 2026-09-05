@@ -29,11 +29,9 @@ See [firmware/README.md](firmware/README.md) for exact base revisions,
 application order, build instructions, and validation limits. The patches are
 tracked here so reconstruction does not depend on unpublished submodule commits.
 
-TangCore was fetched for M5 and is initialized by `git submodule update --init`.
-Its own eight nested submodules are deliberately left uninitialized, so a
-recursive init does not pull a second NESTang checkout alongside the directly
-pinned one. Initialize individual nested submodules only as needed, e.g.
-`git -C firmware/tangcore submodule update --init firmware-bl616`.
+TangCore is initialized by `git submodule update --init`. Its `firmware-bl616`
+and `monitor` nested submodules are used by the matching source build; other
+nested cores remain optional. See [source build instructions](docs/tangcore-source-build.md).
 
 The two NESTang pins are the same code. TangCore `f69c6ff` pins NESTang at
 `c2450818`; the `rtl/core/nestang` pin `5b24a710` is two commits later and the
@@ -42,12 +40,10 @@ already TangCore's NES core, and the M3 bitstream already carries TangCore's
 FPGA-side `iosys_bl616` interface — the legacy IO system is `iosys_picorv32`,
 which this project does not build.
 
-**M5 is in progress and no ROM-loading path works yet.** TangCore v0.7's BL616
-application has been flashed and verified by read-back, but runtime execution,
-storage mounting, and UART communication have not yet been observed. Note also
-that Primer 25K binaries ship only in
-TangCore release **v0.7** (2025-03-13); v0.8 and v0.9 dropped them, and the
-board is commented out of `buildall.bat` at the pinned revision, though the
-source still supports `TANG_BOARD=primer25k`. See
-`docs/m5-tangcore-integration.md` for the full boundary analysis, and
-`docs/bringup.md` and `docs/decision-log.md` for status.
+**M5.0 hardware bring-up passed on 2026-09-04**, using v0.7's packaged Primer
+FPGA images and patched firmware based on v0.9's source revision. The matching
+current-source firmware/monitor/NESTang build is now integrated and builds
+successfully, but its hardware validation is pending. See
+[the source integration record](docs/tangcore-source-build.md) for exact pins,
+Primer adaptations, SDK provenance, build requirements, and validation limits.
+The legacy package remains available as the recovery baseline.

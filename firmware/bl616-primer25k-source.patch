@@ -1,0 +1,108 @@
+--- a/utils/init.cpp
++++ b/utils/init.cpp
+@@ -53,7 +53,7 @@
+     /* Set up Core control UART parameters */
+     struct bflb_uart_config_s uart1_cfg = {
+         // .baudrate = 1000000,
+-#if defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K)
++#if defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K) || defined(TANG_PRIMER25K)
+         .baudrate = 2000000,
+ #else
+         // all other boards have 26Mhz XTAL
+@@ -83,6 +83,8 @@
+     *reg_gpio_tdo = GPIO_HIGH_Z;
+     *reg_gpio_tdi = GPIO_HIGH_Z;
+ 
++    // Primer GPIO10/11 belong to the FPGA UART; the Dock has no BL616 SD slot.
++#ifndef TANG_PRIMER25K
+     // Initialize SD pins
+     board_sdh_gpio_init();
+     // bflb_gpio_init(gpio, GPIO_PIN_10, GPIO_FUNC_SDH | GPIO_ALTERNATE | GPIO_PULLUP | GPIO_SMT_EN | GPIO_DRV_2);  // D1
+@@ -95,4 +97,5 @@
+     // Set GPIO 1 (physical pin 15) to high to enable SDMMC
+     bflb_gpio_init(gpio_dev, GPIO_PIN_16, GPIO_OUTPUT | GPIO_FLOAT | GPIO_SMT_EN | GPIO_DRV_3);
+     bflb_gpio_set(gpio_dev, GPIO_PIN_16);
++#endif
+ }
+--- a/main.cpp
++++ b/main.cpp
+@@ -389,6 +389,15 @@
+     // wait for drive to be ready
+     uint64_t start = bflb_mtimer_get_time_ms();
+     FRESULT res;
++#ifdef TANG_PRIMER25K
++    // The Dock exposes USB storage; SDH would conflict with the FPGA UART.
++    drv = "usb:";
++    overlay_status("Mounting USB...");
++    while ((res = f_mount(&fs, drv, 1)) != FR_OK && bflb_mtimer_get_time_ms() - start < 2000)
++        delay(100);
++    if (res != FR_OK)
++        overlay_status("USB mount failed (FRESULT=%d)", res);
++#else
+     overlay_status("Mounting sd card...", drv);
+     while ((res = f_mount(&fs, "sd:", 1)) != FR_OK && bflb_mtimer_get_time_ms() - start < 500)
+         delay(100);
+@@ -407,6 +416,8 @@
+             overlay_status("USB drive mounted in %d ms", bflb_mtimer_get_time_ms() - start);
+         }
+     }
++
++#endif
+ 
+     // load monitor core at startup
+     string fname;
+--- a/usb/usb_gamepad.cpp
++++ b/usb/usb_gamepad.cpp
+@@ -334,9 +334,35 @@
+                         // SNES: R  L  X A RT LT DN UP ST SE Y  B
+                         // HID:            Y  B  A  X  UP DN LT RT                     
+                         // EXTRA:                ST SE       R  L
++#ifdef NESTV_EXPERIMENTAL_N64_ADAPTER
++                        // Opt-in only: this adapter has not yet been identified by VID/PID.
++                        if (hid->nbytes == 6) {
++                            uint8_t n64 = hid->buffer[1];
++                            uint8_t n64_x = hid->buffer[2];
++                            uint8_t n64_y = hid->buffer[3];
++                            // NES: Right Left Down Up Start Select B A
++                            *snes = ((n64 & 0x20) ? (1 << 7) : 0) |
++                                    ((n64 & 0x80) ? (1 << 6) : 0) |
++                                    ((n64 & 0x40) ? (1 << 5) : 0) |
++                                    ((n64 & 0x10) ? (1 << 4) : 0) |
++                                    ((n64 & 0x08) ? (1 << 3) : 0) |
++                                    ((n64 & 0x04) ? (1 << 2) : 0) |
++                                    ((n64 & 0x02) ? (1 << 1) : 0) |
++                                    ((n64 & 0x01) ? (1 << 0) : 0);
++                            // The adapter repeats X/Y in bytes 4/5. One copy
++                            // is sufficient; use a generous dead zone around
++                            // the observed 0x7f/0x80 center.
++                            if (n64_x < 0x40) *snes |= (1 << 6);
++                            if (n64_x > 0xc0) *snes |= (1 << 7);
++                            if (n64_y < 0x40) *snes |= (1 << 4);
++                            if (n64_y > 0xc0) *snes |= (1 << 5);
++                        } else
++#endif
++                        {
+                         *snes = (hid_state & 1) << 7 | (hid_state & 2) << 5 | (hid_state & 4) << 3 | (hid_state & 8) << 1 |
+                                 (hid_state & 0x10) << 5 | (hid_state & 0x20) << 3| (hid_state & 0x40) >> 6 | (hid_state & 0x80) >> 6 |
+                                 (hid_extra & 0x01) << 10 | (hid_extra & 0x02) << 10 | (hid_extra & 0x10) >> 2 | (hid_extra & 0x20) >> 2;
++                        }
+                         xSemaphoreGive(state_mutex);
+                     } else if (hid->report.type == REPORT_TYPE_KEYBOARD) {
+                         // allow keyboard to double as a gamepad
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -26,6 +26,14 @@
+     add_definitions(-DTANG_NANO20K)
+ endif()
+ 
++option(NESTV_EXPERIMENTAL_N64_ADAPTER "Use the tested six-byte USB-N64 mapping" OFF)
++if(NESTV_EXPERIMENTAL_N64_ADAPTER)
++    if(NOT TANG_BOARD STREQUAL "primer25k")
++        message(FATAL_ERROR "Experimental N64 mapping is only validated on Primer")
++    endif()
++    add_definitions(-DNESTV_EXPERIMENTAL_N64_ADAPTER)
++endif()
++
+ find_package(bouffalo_sdk REQUIRED HINTS $ENV{BL_SDK_BASE})
+ 
+ # Add include directories

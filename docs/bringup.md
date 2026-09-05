@@ -73,7 +73,7 @@ TangCore loads. Details and evidence in `docs/m5-tangcore-integration.md`.
 | # | Goal | Status |
 | - | --- | --- |
 | M5.0 | Stock TangCore v0.7 boots: BL616 flashed, menu over HDMI, ROM runs from TangCore's own `primer25k` cores | **Done 2026-09-04**, using the compatibility firmware documented below. |
-| M5.1 | Our bitstream replaces `cores/primer25k/nestang.bin` and runs a ROM | **Next.** Copy the current NestV Primer binary to the drive as `cores/primer25k/nestang.bin`, preserving the known-good packaged file as a backup, then repeat the same ROM/controller test. |
+| M5.1 | Our bitstream replaces `cores/primer25k/nestang.bin` and runs a ROM | **Pending hardware test.** Validate the matching source package first, then substitute the NesTV M3 binary and repeat the ROM/controller test; see [source integration](tangcore-source-build.md). |
 | M5.2 | Storage moves from USB drive to SD | Not started |
 | M5.3 | Last-game boot, Select+Start menu, suspend | Not started; needs a `firmware-bl616` fork |
 | M5.4 | Analog output and a controller coexist | Not started (M4 territory) |
@@ -129,9 +129,9 @@ recovery details and hashes.
 
 ## Open items
 
-M5.0 is complete. The next functional milestone is M5.1: replace the packaged
-NESTang core with this repository's NestV Primer bitstream and repeat the exact
-known-good HDMI/USB/controller test. After that, resume M4 analog Y/C/composite
+M5.0 is complete. First validate the matching upstream source package; then
+complete M5.1 by substituting this repository's NesTV Primer bitstream and
+repeating the HDMI/USB/controller test. After that, resume M4 analog Y/C/composite
 work, then return to M5.2–M5.4 for internal storage, last-game boot/menu UX, and
 coexistence with the final wired NES controllers.
 
@@ -201,14 +201,13 @@ is a carrier-board item; the firmware side already works.
 
 ## Next step
 
-Start with M5.1. Back up the drive's known-good
-`cores/primer25k/nestang.bin`, replace it with the current NestV Primer binary
-`impl/pnr/nestv_primer25k_m3.bin` (SHA-256
-`dcbef074ebea5c508c5314e55f26db0d67991836ff08299c94478d2586c056db`)
-in Gowin `.bin` format, and boot using the unchanged working firmware/topology.
-Select `Baseball (USA, Europe).nes` and verify HDMI video plus N64 D-pad, analog
-stick, A, B, Start, and Z-as-Select in game. If that passes, record the exact
-bitstream hash and mark M5.1 done before beginning analog-output integration.
+First validate the [matching upstream source package](tangcore-source-build.md)
+on hardware. It builds successfully and retains the Primer board fixes while
+using the current protocol. Preserve the v0.7/diagnostic setup above for recovery.
+After this passes, test the NesTV M3 binary with the new firmware and monitor
+and record its hash to complete M5.1. The earlier instruction to replace only
+`nestang.bin` while keeping the legacy-compatible firmware is superseded:
+M3 already uses the newer framed protocol.
 
 Do not reflash `0x0`: it already matches the stock partner firmware, and the
-project flash script deliberately skips it.
+project flash script deliberately skips it by default.

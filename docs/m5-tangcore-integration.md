@@ -1,5 +1,10 @@
 # M5 — TangCore integration boundary
 
+> Historical bring-up analysis. For the current matched upstream source build,
+> see [TangCore source integration](tangcore-source-build.md). M5.0 ROM/controller
+> operation is verified; source-package hardware testing is the next step.
+
+
 Written 2026-08-12, at the start of M5. Records what TangCore actually is,
 what the existing Primer 25K RTL already provides, and what is genuinely
 missing. Sources are the pinned TangCore checkout at `firmware/tangcore`,

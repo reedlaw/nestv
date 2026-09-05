@@ -1,4 +1,9 @@
-# Primer 25K diagnostic firmware checkpoint
+# Primer 25K firmware
+
+The current development path is the [matching upstream source build](../docs/tangcore-source-build.md).
+It preserves the upstream protocol and has reproducible firmware/FPGA packaging.
+
+## Legacy diagnostic firmware checkpoint
 
 This package preserves the M5.0 bring-up source, including diagnostics and the
 USB-N64 six-byte report workaround. It is a development checkpoint, not the
@@ -7,7 +12,7 @@ final board configuration. Hardware results and remaining cleanup are in
 
 ## Reconstruct from pinned sources
 
-Run from the NestV repository root, using fresh checkouts for the two clones
+Run from the NesTV repository root, using fresh checkouts for the two clones
 below (choose other paths if they already exist):
 
 ```sh
@@ -32,7 +37,7 @@ non-cached FatFs diagnostic-buffer correction.
 
 Use the Bouffalo T-Head `riscv64-unknown-elf-` toolchain (the validated local
 compiler is GCC 10.2.0) and the SDK's bundled CMake. Put the toolchain's `bin`
-directory on PATH, then run from the NestV root:
+directory on PATH, then run from the NesTV root:
 
 ```sh
 make -C build/primer25k-firmware \
@@ -63,7 +68,7 @@ Patch reconstruction was checked against every tracked file in the working
 firmware checkout. The SDK patch was checked against the local SDK changes.
 A fresh build from reconstructed firmware source is the packaging check;
 firmware hashes may differ across build paths/toolchains. M5.1 testing with
-NestV's own FPGA binary and production cleanup remain outstanding.
+NesTV's own FPGA binary and production cleanup remain outstanding.
 
 Fresh reconstruction build passed on 2026-09-05. Its application SHA-256 is
 `1fd827f4e98a79bde24dffae87249e8c91fb5b707cdc9a33571fe64d53bd73d9`.

@@ -1,0 +1,42 @@
+--- a/src/monitor_top.v
++++ b/src/monitor_top.v
+@@ -62,7 +62,11 @@
+ `endif
+ 
+     // LED
++`ifdef PRIMER
++    output [1:0] led
++`else
+     output [7:0] led
++`endif
+ );
+ 
+ // Clock signals
+@@ -148,7 +152,12 @@
+     .usb_dm(usb1_dn), .usb_dp(usb1_dp),
+     .game_snes(joy_usb1), .typ(usb_type), .conerr(usb_conerr)
+ );
++`ifdef PRIMER
++// The Primer Dock exposes two LEDs; do not allocate six extra output pins.
++assign led = ~{usb_type[0], usb_conerr};
++`else
+ assign led = ~{joy_usb1[4:0], usb_type, usb_conerr};
++`endif
+ `else
+ assign joy_usb1 = 12'b0;
+ `endif
+--- a/build.tcl
++++ b/build.tcl
+@@ -19,6 +19,7 @@
+     add_file -type verilog "src/plla/pll_12.v"
+     add_file -type verilog "src/usb_hid_host.v"
+     add_file -type cst "src/boards/primer25k.cst"
++    add_file -type sdc "src/boards/primer25k.sdc"
+     set_option -use_ready_as_gpio 1
+     set_option -use_done_as_gpio 1
+ } elseif {$dev eq "mega60k"} {
+--- /dev/null
++++ b/src/boards/primer25k.sdc
+@@ -0,0 +1,2 @@
++# Dock oscillator; Gowin derives the PLL output clocks.
++create_clock -name sys_clk -period 20 [get_nets {sys_clk}]

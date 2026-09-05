@@ -3,6 +3,27 @@
 Records decisions and corrections made during development, especially ones
 that aren't obvious from reading the code or `PROJECT.md` alone.
 
+## 2026-09-05 — integrate matching TangCore source builds
+
+Fetched upstream: `f69c6ff7` is still TangCore `main`. Its firmware, monitor,
+and NESTang pins match v0.9; there is no source-pointer upgrade to make.
+The integration gap was the use of v0.7 FPGA binaries with newer firmware.
+
+Added an isolated build from those exact source pins, preserving the framed
+protocol and the required Primer clock/UART/storage fixes. A generated SDK
+board directory avoids modifying the shared generic board. The legacy
+checkpoint remains intact; its compatibility parser and diagnostics are not
+used by the source build. N64 mapping is an explicit opt-in pending VID/PID.
+
+Both FPGA images build under Gowin 1.9.12.03 with the equivalent HDMI VCO
+correction. The monitor additionally needs its LED width reduced to the two
+Primer LEDs and a 50 MHz input constraint. Both report zero total negative
+setup/hold slack under the current constraints. BL616 builds pass with the
+N64 workaround enabled and disabled. Package-integrity checks pass.
+
+The package is not hardware-validated. Test it as a matching set before
+substituting NesTV's M3 image. See [source build record](tangcore-source-build.md).
+
 ## 2026-09-04 — M5.0 menu works; firmware mismatches were the root cause
 
 Real-hardware bring-up reached a visible, readable TangCore menu on the Primer

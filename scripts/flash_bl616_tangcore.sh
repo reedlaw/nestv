@@ -5,6 +5,9 @@
 #   0x00000  bl616_fpga_partner_primer25k.bin   Sipeed stock debugger firmware
 #   0x40000  tangcore_primer25k.bin             TangCore application
 #
+# APP=source SOURCE_PACKAGE=<build>/package selects the verified matching-source
+# application. Copy that package's media cores together before booting it.
+#
 # Set APP=debug to write tangcore_primer25k_debug_uart.bin instead — the
 # diagnostic build that mirrors overlay_status(), printf() and a 1 Hz
 # heartbeat to J7 pin 2 (JTAG TDI) at 9600 8N1. See
@@ -32,6 +35,13 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# Verify the complete source package before accessing the programmer.
+if [ "${APP:-stock}" = source ]; then
+    : "${SOURCE_PACKAGE:?set SOURCE_PACKAGE to the source build package directory}"
+    SOURCE_PACKAGE=$(CDPATH= cd -- "$SOURCE_PACKAGE" && pwd)
+    python3 "$root/scripts/build_tangcore_source.py" --verify-package "$SOURCE_PACKAGE"
+fi
+
 fw=$root/build/tangcore/firmware
 work=$root/build/tangcore/flash
 
@@ -132,7 +142,8 @@ fi
 case ${APP:-stock} in
 debug)	app=$fw/tangcore_primer25k_debug_uart.bin ;;
 stock)	app=$fw/tangcore_primer25k.bin ;;
-*)	echo "error: APP must be 'stock' or 'debug'" >&2; exit 2 ;;
+source) app=$SOURCE_PACKAGE/firmware/tangcore_primer25k.bin ;;
+*)	echo "error: APP must be 'stock', 'debug', or 'source'" >&2; exit 2 ;;
 esac
 [ -f "$app" ] || { echo "error: $app not found" >&2; exit 1; }
 
