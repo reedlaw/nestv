@@ -3,7 +3,55 @@
 Records decisions and corrections made during development, especially ones
 that aren't obvious from reading the code or `PROJECT.md` alone.
 
-## 2026-08-29 (M5.0 root cause) — the Dock's USB-C is a fixed sink; a laptop hub can never work
+## 2026-09-04 — M5.0 menu works; firmware mismatches were the root cause
+
+Real-hardware bring-up reached a visible, readable TangCore menu on the Primer
+25K Dock. USB storage mounts, `monitor.bin` programs the FPGA, and the monitor
+returns core ID `0` over the 2 Mbps link. This supersedes the 2026-08-29
+conclusion below that the tested splitter class was the root cause: both tested
+power-injection splitters were able to carry storage data once the firmware was
+clocked correctly.
+
+The fixes were established incrementally with J7 `TDI` software-UART logs and,
+after USB began mounting, an on-drive `tangcore-diagnostic.txt` report:
+
+- The generic Bouffalo `bl616dk` startup explicitly configured a **40 MHz**
+  crystal, but the Dock's BL616 uses **26 MHz**. Configuring the correct crystal
+  made the USB host see and mount the drive. The existing software-UART delay
+  and FPGA-UART baud compensation had to be removed/recalculated afterward.
+- Primer FPGA control UART uses BL616 GPIO11 TX and GPIO10 RX. Generic SD setup
+  immediately reassigned those pins to SDH, breaking the link. The diagnostic
+  Primer build now skips SD pin initialization; the stock Dock has no applicable
+  BL616 SD slot anyway.
+- The FPGA returned unframed bytes. Four queries at 2 Mbps produced exactly
+  `11 00 11 00 11 00 11 00`, with no UART error flags: response type `0x11`,
+  monitor core ID `0`. The BL616 parser wrongly waited for a framed `0xAA`
+  header and discarded them. It now accepts the documented unframed response
+  forms (`0x11` core ID, `0x01` joypads, `0x22` config string).
+- Outgoing OSD text commands declared null-terminated strings but omitted the
+  zero and underreported packet length. The monitor consumed following command
+  bytes as glyphs, visibly producing repeated `>*>*`. Sending the terminator
+  and including it in the length produced the complete menu.
+- USB logging itself requires both the source buffer and FatFs `FIL` object
+  (which embeds a 512-byte sector buffer when `FF_FS_TINY=0`) in non-cached RAM.
+  The first report proved the UART result despite a corrupted first sector; the
+  latest build moves both objects to the USB non-cache section.
+
+Confirmed now: BL616 secondary boot, USB host initialization, FAT32 mount and
+reads, FPGA SRAM programming, BL616→FPGA commands, FPGA→BL616 responses, core-ID
+parsing, and menu rendering. Still to confirm: selecting the known NES ROM,
+loading `nestang.bin`, gameplay, and controller input through a USB hub.
+
+Operationally, diagnostics should now be written to the USB drive and inspected
+on the laptop. The loose J7 diagnostic wires were essential to reach working USB
+but should not be the default test loop now that persistent USB logging exists.
+
+## 2026-08-29 (superseded diagnosis) — USB-C role analysis blamed the adapter
+
+**Superseded by the 2026-09-04 hardware result above.** The electrical role
+analysis remains useful, but its conclusion was too strong: the tested
+power-injection splitters carried USB data successfully after the firmware
+clock was corrected. `FRESULT=3` did not prove the adapter was the cause.
 
 With the diagnostic UART finally readable, a boot with the powered hub and USB
 stick attached gives:
@@ -359,3 +407,66 @@ bring-up sequence lists ROM loading (step 8) before the analog prototype
 steps (steps 9–14), and M5's exit criteria only requires composite/no-HDMI
 operation as its *final* checkbox, not a prerequisite to start. M5 can and
 should proceed over HDMI first, independent of M4.
+
+### 2026-09-04 — controller confirmed; ROM launch isolated
+
+The USB N64 adapter successfully controls the menu through the powered hub.
+Its persistent report contains valid six-byte HID reports and mapped controller
+states, so input is no longer the blocker. Selecting the NES ROM turns video
+black but does not visibly start the game.
+
+The controller logger was still writing and syncing a FatFs file from the HID
+task while the main task read the FPGA bitstream and ROM. Since this firmware's
+FatFs configuration is not reentrant, that diagnostic itself could corrupt the
+load path. The next build stops and closes that logger immediately after file
+selection, then uses serialized `rom-diagnostic.txt` milestones to identify
+whether failure occurs in FPGA programming, core-ID handshake, or ROM transfer.
+
+The resulting report reached every milestone: NESTang programmed, core ID `1`
+responded, and all 24,592 bytes transferred with `FR_OK`. The remaining failure
+is therefore the unacknowledged final `loading_state=0` release command or core
+startup immediately after it. The follow-up build spaces and repeats that
+command three times and queries core ID afterward.
+
+The repeated release did not help, and the post-load core-ID query returned
+`-1`. This shows the FPGA UART command receiver had already stopped responding
+during the ROM stream; it was not merely one lost release command. The next
+diagnostic uses paced 256-byte frames and in-stream core-ID checkpoints.
+
+The fine-grained probe remained responsive after entering loading mode and
+after the first 256-byte packet, then failed exactly at 512 bytes. Initializing
+the pinned NESTang history revealed the real incompatibility: TangCore 0.7's
+March `nestang.bin` uses the original unframed command protocol and responds to
+core-ID with `11 00`, exactly matching the captured bytes. The firmware source
+pinned later was upgraded in May to an `AA` + 16-bit-length framed protocol.
+Thus the release core binary and rebuilt firmware were protocol-incompatible.
+Primer compatibility now sends the legacy command byte directly, uses the old
+24-bit ROM length, suppresses unsupported debug command `0x0d`, and uses the
+legacy HID byte order. Other boards retain the framed protocol.
+
+Confirmed on hardware: with that compatibility change, NESTang accepted the
+entire ROM, left its loading screen, and started the game. This closes the ROM
+loading blocker and confirms the release/source protocol mismatch as root cause.
+
+Before the protocol mismatch was found, pacing alone failed: the pre-release and post-release core-ID queries both
+returned `-1`. Inspection of the now-local pinned NESTang source shows its
+2 Mbps UART receiver uses an 8x filtered sampler with a ~21.492 MHz clock,
+while the BL616 sends one stop bit; NESTang's own transmitter deliberately uses
+two. A two-stop-bit experiment did not help and was reverted. This timing theory
+is superseded by the confirmed old-core/new-firmware protocol mismatch above.
+
+### 2026-09-04 — M5.0 complete and controller usable
+
+The final test booted a rom into gameplay and controlled
+it with the USB-N64 adapter. Its six-byte HID reports behave as a rolling sample:
+byte 0 retains the prior button state, byte 1 is current, and bytes 2/3 carry
+centered X/Y axes (also duplicated later in the report). OR-ing bytes 0 and 1
+caused stale directions to move the menu cursor immediately before A selected;
+using byte 1 alone fixed nested-menu/file selection. Both D-pad and analog stick
+now provide directions; A/B, Start, and Z map to NES A/B, Start, and Select.
+
+Working diagnostic firmware SHA-256:
+`387a301ea19021a11ad2f92c0d07d72056b5c4ba32a0ac1094863987996419af`.
+M5.0 is complete. Resume at M5.1 by substituting this repository's Primer
+NESTang `.bin` for the packaged core while keeping every other known-good
+variable fixed.

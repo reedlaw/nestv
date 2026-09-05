@@ -22,19 +22,12 @@ The project does not modify the submodule checkout. For M3,
 NESTang's HDMI PLL in `build/gowin/primer25k/`, changing its equivalent VCO
 configuration from 1485 MHz to an in-range 742.5 MHz before Gowin synthesis.
 
-**The BL616 firmware is patched for bring-up.** `firmware/bl616-debug-uart.patch`
-adds a bit-banged 9600 8N1 diagnostic UART on J7 pin 2, because the Primer 25K
-Dock exposes no other serial output. It applies to `firmware-bl616` at
-`a5a6ea1`; the same commit is on the `nestv-debug-uart` branch of that nested
-submodule. The patch is kept here so it survives a submodule deinit:
-
-```
-git -C firmware/tangcore submodule update --init firmware-bl616
-git -C firmware/tangcore/firmware-bl616 am < ../../bl616-debug-uart.patch
-```
-
-Build with `make BL_SDK_BASE=<sdk> TANG_BOARD=primer25k` and flash with
-`make tangcore-flash-debug`. All its test modes default to off.
+**The BL616 firmware and Bouffalo SDK are patched for Primer 25K bring-up.**
+The diagnostic UART, legacy-core compatibility, controller workaround, and
+26 MHz SDK clock changes are preserved as patches in `firmware/`.
+See [firmware/README.md](firmware/README.md) for exact base revisions,
+application order, build instructions, and validation limits. The patches are
+tracked here so reconstruction does not depend on unpublished submodule commits.
 
 TangCore was fetched for M5 and is initialized by `git submodule update --init`.
 Its own eight nested submodules are deliberately left uninitialized, so a

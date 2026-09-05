@@ -1,0 +1,829 @@
+diff --git a/core/nes.cpp b/core/nes.cpp
+index 9d3feef..eecfd07 100644
+--- a/core/nes.cpp
++++ b/core/nes.cpp
+@@ -8,28 +8,39 @@
+ // Load a NES ROM
+ // return 0 if successful
+ int loadnes(const char *fname) {
+-    unsigned int off = 0, br, total = 0;
++    unsigned int off = 0, br = 0, total = 0;
+     unsigned int size;
++    int checkpoint_core = -1;
++    unsigned int checkpoint_bytes[8] = {};
++    int16_t checkpoint_ids[8] = {};
++    unsigned int checkpoint_count = 0;
++    int16_t after_loading_core = -1;
++    unsigned int first_failed_bytes = 0;
+     int r = 1;
+     DEBUG("loadnes start\n");
++    storage_diagnostic_log("NES loader entered for %s\r\n", fname);
+ 
+     // check extension .nes
+     char *p = strcasestr(fname, ".nes");
+     if (p == NULL) {
++        storage_diagnostic_log("NES loader rejected extension\r\n");
+         overlay_message("Only .nes supported", 1);
+         goto loadnes_end;
+     }
+ 
+     r = f_open(&fcore, fname, FA_READ);
+     if (r) {
++        storage_diagnostic_log("NES ROM open failed result=%d\r\n", r);
+         overlay_status("Cannot open file");
+         goto loadnes_end;
+     }
+     size = get_file_size(fname);
++    storage_diagnostic_log("NES ROM open OK size=%u\r\n", size);
+ 
+     // load actual ROM
+     set_loading_state(1);
+     core_running = false;
++    after_loading_core = get_core_id();
+ 
+     // Send rom content
+     if ((r = f_lseek(&fcore, off)) != FR_OK) {
+@@ -39,27 +50,57 @@ int loadnes(const char *fname) {
+ 
+ 
+     do {
+-        if ((r = f_read(&fcore, fbuf, 1024 /*BLOCK_SIZE*/, &br)) != FR_OK)
++        // Smaller frames plus a short gap let the FPGA UART receiver return
++        // fully to RECV_IDLE before the next header.
++        if ((r = f_read(&fcore, fbuf, 256, &br)) != FR_OK)
+             break;
+         // start rom loading command
+         send_fbuf_data(br);
+-        taskYIELD();                // allow gamepad polling to run
++        delay(1);
+         total += br;
++        checkpoint_core = get_core_id();
++        if (checkpoint_core != 1) {
++            first_failed_bytes = total;
++            break;
++        }
+         if ((total & 0xfff) == 0) {	// display progress every 4KB
++            if (checkpoint_count < 8) {
++                checkpoint_bytes[checkpoint_count] = total;
++                checkpoint_ids[checkpoint_count] = checkpoint_core;
++                checkpoint_count++;
++            }
+             //              01234567890123456789012345678901
+             overlay_status("%d/%dK                          ", total >> 10, size >> 10);
+         }
+-    } while (br == 1024 /*BLOCK_SIZE*/);
++    } while (br == 256);
+ 
+     DEBUG("loadnes: %d bytes\n", total);
+-    overlay_status("Success");
+-    core_running = true;
+-
+-    overlay(0);		// turn off OSD
+-
+ loadnes_snes_end:
+-    set_loading_state(0);   // turn off game loading, this starts the core
+     f_close(&fcore);
++    checkpoint_core = get_core_id();
++    storage_diagnostic_log("NES stream ended result=%d bytes=%u last_read=%u after-loading core id=%d first-failed bytes=%u pre-release core id=%d\r\n",
++                           r, total, br, after_loading_core, first_failed_bytes,
++                           checkpoint_core);
++    for (unsigned int i = 0; i < checkpoint_count; i++)
++        storage_diagnostic_log("NES checkpoint bytes=%u core id=%d\r\n",
++                               checkpoint_bytes[i], checkpoint_ids[i]);
++
++    // The loading-state command has no acknowledgement. Leave a small gap
++    // after the data stream and repeat it so a lost final UART frame cannot
++    // leave NESTang permanently on its native loading screen.
++    delay(20);
++    set_loading_state(0);
++    delay(20);
++    set_loading_state(0);
++    delay(20);
++    set_loading_state(0);
++    if (r == FR_OK) {
++        overlay_status("Success");
++        core_running = true;
++        overlay(0);		// turn off OSD after releasing the core
++    }
++    checkpoint_core = get_core_id();
++    storage_diagnostic_log("NES release sent; post-release core id=%d\r\n", checkpoint_core);
+ loadnes_end:
+     return r;
+ }
+diff --git a/main.cpp b/main.cpp
+index a534a63..8f20dbe 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -60,6 +60,20 @@ TaskHandle_t main_task_handle;
+ TaskHandle_t uart1_rx_task_handle;
+ TaskHandle_t debug_uart_task_handle;
+ 
++static volatile uint32_t uart1_rx_bytes;
++static volatile uint32_t uart1_rx_status;
++static volatile uint32_t uart1_rx_raw_len;
++static volatile bool uart1_reset_parser;
++static uint8_t uart1_rx_raw[128];
++USB_NOCACHE_RAM_SECTION static char diagnostic_line[512];
++USB_NOCACHE_RAM_SECTION static FIL diagnostic_report;
++USB_NOCACHE_RAM_SECTION static FIL controller_report;
++USB_NOCACHE_RAM_SECTION static char controller_line[512];
++USB_NOCACHE_RAM_SECTION static FIL storage_report;
++USB_NOCACHE_RAM_SECTION static char storage_line[512];
++static SemaphoreHandle_t controller_report_mutex;
++static bool controller_report_open;
++
+ static void debug_uart_task(void *)
+ {
+     unsigned heartbeat = 0;
+@@ -142,13 +156,21 @@ static int menu_loadrom(const char *dir) {
+         return 1;
+     }
+ 
++    // Stop the background controller logger before any core/ROM filesystem I/O.
++    // FatFs is not configured as reentrant on this target.
++    controller_diagnostic_log("menu selected %s; stopping controller log\r\n", fname.c_str());
++    controller_diagnostic_stop();
++    storage_diagnostic_log("selected %s (size=%u)\r\n", fname.c_str(),
++                           (unsigned)get_file_size(fname.c_str()));
++
+     // now proceed to load the core and ROM
+     joy1_state = 0; joy2_state = 0; // clear joypad states
+ 
+     // load core if in cores/ dir
+     if (fname.find(string(drv) + "cores") == 0) {
+         overlay_status("Core: %s", fname.c_str());
+-        fpga_program(fname.c_str());
++        bool programmed = fpga_program(fname.c_str());
++        storage_diagnostic_log("direct core program returned %d\r\n", programmed);
+         _overlay_on = 1;                // turn on overlay after core is loaded
+         return 0;       // return to main menu
+     } 
+@@ -165,12 +187,15 @@ static int menu_loadrom(const char *dir) {
+         }
+     }
+     if (core == NULL) {
++        storage_diagnostic_log("no core mapping for path %s\r\n", path.c_str());
+         overlay_status("Core not found: %s", path.c_str());
+         return -1;
+     }
+ 
+     // user chose a ROM file
+     active_core = get_core_id();
++    storage_diagnostic_log("ROM maps to core id=%d file=%s; active core before load=%d\r\n",
++                           core->id, core->core_file, active_core);
+ 
+     // load core if needed
+     if (core != NULL) {
+@@ -178,7 +203,10 @@ static int menu_loadrom(const char *dir) {
+             string fname_core;
+             if (find_core_for_board(fname_core, core->core_file)) {
+                 // load core
+-                fpga_program(fname_core.c_str());
++                storage_diagnostic_log("programming core %s (size=%u)\r\n", fname_core.c_str(),
++                                       (unsigned)get_file_size(fname_core.c_str()));
++                bool programmed = fpga_program(fname_core.c_str());
++                storage_diagnostic_log("core program returned %d\r\n", programmed);
+                 _overlay_on = 1;
+ 
+                 // allow 2 seconds for core to start
+@@ -189,15 +217,22 @@ static int menu_loadrom(const char *dir) {
+                     if (active_core == core->id)
+                         break;
+                 }
++                storage_diagnostic_log("core handshake finished with id=%d\r\n", active_core);
+             } 
+         }
+ 
+         // Attemp to load ROM
+         if (active_core == core->id) {
+             overlay_status("Loading ROM: %s\n", fname.c_str());
+-            core->load_rom(fname.c_str());
++            storage_diagnostic_log("calling ROM loader\r\n");
++            int load_result = core->load_rom(fname.c_str());
++            int post_load_core = get_core_id();
++            storage_diagnostic_log("ROM loader returned %d; core_running=%d; post-load core id=%d\r\n",
++                                   load_result, core_running, post_load_core);
+             return 1;
+         } else {
++            storage_diagnostic_log("core failed to load; expected=%d actual=%d\r\n",
++                                   core->id, active_core);
+             overlay_status("Core failed to load\n");
+             delay(1000);
+             return -1;
+@@ -220,10 +255,17 @@ static void send_hid_to_core(void) {
+         get_joypad_states(&joy1, &joy2, &hid1, &hid2);
+         if (first || hid1 != hid1_old || hid2 != hid2_old) {    // send HID if changed
+             fpga_tx_header(0x09, 5);
++#ifdef TANG_PRIMER25K
++            fpga_tx_byte(hid1 & 0xff);
++            fpga_tx_byte(hid1 >> 8);
++            fpga_tx_byte(hid2 & 0xff);
++            fpga_tx_byte(hid2 >> 8);
++#else
+             fpga_tx_byte(hid1 >> 8);
+             fpga_tx_byte(hid1 & 0xff);
+             fpga_tx_byte(hid2 >> 8);
+             fpga_tx_byte(hid2 & 0xff);
++#endif
+             hid1_old = hid1;
+             hid2_old = hid2;
+             first = false;
+@@ -302,14 +344,57 @@ static void uart1_rx_task(void *pvParameters)
+     uint8_t pos = 0;
+     uint8_t type = 0;
+     uint16_t len = 0;
++    uint8_t direct_type = 0;
++    uint8_t direct_pos = 0;
+     
+     while (1) {
++        uart1_rx_status |= bflb_uart_get_intstatus(uart1_dev);
++        if (uart1_reset_parser) {
++            pos = 0;
++            len = 0;
++            type = 0;
++            direct_type = 0;
++            direct_pos = 0;
++            uart1_reset_parser = false;
++        }
+         if (bflb_uart_rxavailable(uart1_dev)) {
+             uint8_t ch = bflb_uart_getchar(uart1_dev);
++            uart1_rx_bytes++;
++            if (uart1_rx_raw_len < sizeof(uart1_rx_raw))
++                uart1_rx_raw[uart1_rx_raw_len++] = ch;
+             
+-            if (pos == 0) {          // expecting 0xAA
+-                if (ch == 0xAA) 
++            // FPGA-to-BL616 responses use an unframed type byte followed by
++            // payload: 0x11 core-id, 0x01 four joypad bytes, 0x22 C string.
++            if (direct_type == 0x11) {
++                if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
++                    core_id = ch;
++                    xSemaphoreGive(state_mutex);
++                }
++                direct_type = 0;
++                direct_pos = 0;
++            } else if (direct_type == 0x01) {
++                buffer[direct_pos++] = ch;
++                if (direct_pos == 4) {
++                    if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
++                        joy1_state = buffer[0] | ((uint16_t)buffer[1] << 8);
++                        joy2_state = buffer[2] | ((uint16_t)buffer[3] << 8);
++                        xSemaphoreGive(state_mutex);
++                    }
++                    direct_type = 0;
++                    direct_pos = 0;
++                }
++            } else if (direct_type == 0x22) {
++                if (ch == 0) {
++                    direct_type = 0;
++                    direct_pos = 0;
++                }
++            } else if (pos == 0) {
++                if (ch == 0x11 || ch == 0x01 || ch == 0x22) {
++                    direct_type = ch;
++                    direct_pos = 0;
++                } else if (ch == 0xAA) {
+                     pos++;
++                }
+             } else if (pos == 1) {   // len msb
+                 len = (uint16_t)ch << 8;
+                 pos++;
+@@ -398,6 +483,179 @@ static void uart1_rx_task(void *pvParameters)
+     }
+ }
+ 
++static void set_fpga_uart_baud(uint32_t baud)
++{
++    struct bflb_uart_config_s cfg = {
++        .baudrate = baud,
++        .direction = UART_DIRECTION_TXRX,
++        .data_bits = UART_DATA_BITS_8,
++        .stop_bits = UART_STOP_BITS_1,
++        .parity = UART_PARITY_NONE,
++        .bit_order = UART_LSB_FIRST,
++        .flow_ctrl = 0,
++        .tx_fifo_threshold = 7,
++        .rx_fifo_threshold = 7,
++    };
++    bflb_uart_init(uart1_dev, &cfg);
++}
++
++static void diagnostic_write(FIL *file, const char *format, ...)
++{
++    va_list args;
++    va_start(args, format);
++    int length = vsnprintf(diagnostic_line, sizeof(diagnostic_line), format, args);
++    va_end(args);
++    if (length < 0)
++        return;
++    if ((size_t)length >= sizeof(diagnostic_line))
++        length = sizeof(diagnostic_line) - 1;
++    UINT written;
++    f_write(file, diagnostic_line, length, &written);
++}
++
++void controller_diagnostic_start(void)
++{
++    controller_report_mutex = xSemaphoreCreateMutex();
++    if (!controller_report_mutex)
++        return;
++    if (f_open(&controller_report, "usb:controller-diagnostic.txt",
++               FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
++        return;
++    controller_report_open = true;
++    controller_diagnostic_log("controller logging started; press every button and direction\r\n");
++}
++
++void controller_diagnostic_log(const char *format, ...)
++{
++    if (!controller_report_open || !controller_report_mutex)
++        return;
++    if (xSemaphoreTake(controller_report_mutex, pdMS_TO_TICKS(1000)) != pdTRUE)
++        return;
++
++    int prefix = snprintf(controller_line, sizeof(controller_line), "[%lu ms] ",
++                          (unsigned long)bflb_mtimer_get_time_ms());
++    va_list args;
++    va_start(args, format);
++    int body = vsnprintf(controller_line + prefix, sizeof(controller_line) - prefix,
++                         format, args);
++    va_end(args);
++    if (body < 0)
++        body = 0;
++    int length = prefix + body;
++    if ((size_t)length >= sizeof(controller_line))
++        length = sizeof(controller_line) - 1;
++    UINT written;
++    f_write(&controller_report, controller_line, length, &written);
++    f_sync(&controller_report);
++    xSemaphoreGive(controller_report_mutex);
++}
++
++void controller_diagnostic_stop(void)
++{
++    if (!controller_report_open || !controller_report_mutex)
++        return;
++    if (xSemaphoreTake(controller_report_mutex, pdMS_TO_TICKS(1000)) != pdTRUE)
++        return;
++    f_sync(&controller_report);
++    f_close(&controller_report);
++    controller_report_open = false;
++    xSemaphoreGive(controller_report_mutex);
++}
++
++void storage_diagnostic_log(const char *format, ...)
++{
++    if (f_open(&storage_report, "usb:rom-diagnostic.txt",
++               FA_OPEN_APPEND | FA_WRITE) != FR_OK)
++        return;
++
++    int prefix = snprintf(storage_line, sizeof(storage_line), "[%lu ms] ",
++                          (unsigned long)bflb_mtimer_get_time_ms());
++    va_list args;
++    va_start(args, format);
++    int body = vsnprintf(storage_line + prefix, sizeof(storage_line) - prefix,
++                         format, args);
++    va_end(args);
++    if (body < 0)
++        body = 0;
++    int length = prefix + body;
++    if ((size_t)length >= sizeof(storage_line))
++        length = sizeof(storage_line) - 1;
++    UINT written;
++    f_write(&storage_report, storage_line, length, &written);
++    f_sync(&storage_report);
++    f_close(&storage_report);
++}
++
++static void run_usb_uart_diagnostic(void)
++{
++    FRESULT open_result = f_open(&diagnostic_report, "usb:tangcore-diagnostic.txt",
++                                 FA_CREATE_ALWAYS | FA_WRITE);
++    if (open_result != FR_OK) {
++        debug_uart_log("DIAGNOSTIC: could not create USB report");
++        return;
++    }
++
++    diagnostic_write(&diagnostic_report, "TangCore Primer 25K USB/UART diagnostic\r\n");
++    diagnostic_write(&diagnostic_report, "Build: %s %s\r\n", __DATE__, __TIME__);
++    diagnostic_write(&diagnostic_report, "MCU clock=%lu UART1 clock=%lu\r\n",
++                     (unsigned long)bflb_clk_get_system_clock(BL_SYSTEM_CLOCK_MCU_CLK),
++                     (unsigned long)Clock_Peripheral_Clock_Get(BL_PERIPHERAL_CLOCK_UART1));
++    diagnostic_write(&diagnostic_report, "GPIO10_CFG=%08lx GPIO11_CFG=%08lx\r\n",
++                     (unsigned long)*(volatile uint32_t *)0x200008ec,
++                     (unsigned long)*(volatile uint32_t *)0x200008f0);
++
++    // The first USB report proved the electrical link is exactly 2 Mbps.
++    // Keep the on-drive test at that known-good rate; malformed bytes from
++    // deliberately wrong rates are not useful and can confuse old parsers.
++    const uint32_t bauds[] = { 2000000 };
++    for (unsigned test = 0; test < sizeof(bauds) / sizeof(bauds[0]); test++) {
++        taskENTER_CRITICAL();
++        uart1_rx_bytes = 0;
++        uart1_rx_status = 0;
++        uart1_rx_raw_len = 0;
++        uart1_reset_parser = true;
++        core_id = -1;
++        taskEXIT_CRITICAL();
++
++        set_fpga_uart_baud(bauds[test]);
++        delay(100);
++        for (int request = 0; request < 4; request++) {
++            fpga_tx_header(0x01, 1);
++            delay(150);
++        }
++
++        taskENTER_CRITICAL();
++        uint32_t count = uart1_rx_bytes;
++        uint32_t status = uart1_rx_status;
++        uint32_t raw_len = uart1_rx_raw_len;
++        int16_t observed_core = core_id;
++        uint8_t raw[128];
++        memcpy(raw, uart1_rx_raw, raw_len);
++        taskEXIT_CRITICAL();
++
++        diagnostic_write(&diagnostic_report,
++                         "\r\nbaud=%lu bit_prd=%08lx rx_bytes=%lu int_status=%08lx core_id=%d\r\nraw:",
++                         (unsigned long)bauds[test],
++                         (unsigned long)*(volatile uint32_t *)0x2000a108,
++                         (unsigned long)count, (unsigned long)status,
++                         (int)observed_core);
++        for (uint32_t i = 0; i < raw_len; i++)
++            diagnostic_write(&diagnostic_report, " %02x", raw[i]);
++        diagnostic_write(&diagnostic_report, "\r\n");
++        f_sync(&diagnostic_report);
++    }
++
++    set_fpga_uart_baud(2000000);
++    diagnostic_write(&diagnostic_report, "\r\nDIAGNOSTIC COMPLETE\r\n");
++    f_sync(&diagnostic_report);
++    f_close(&diagnostic_report);
++
++    overlay_clear();
++    overlay_cursor(5, 13);
++    overlay_printf("DIAGNOSTIC COMPLETE");
++    debug_uart_log("DIAGNOSTIC COMPLETE; report saved to USB");
++}
++
+ // Display main menu and call other menu functions
+ static void main_task(void *pvParameters)
+ {
+@@ -407,32 +665,33 @@ static void main_task(void *pvParameters)
+     // volatile uint32_t *reg_gpio2 = (volatile uint32_t *)0x200008cc;
+     // volatile uint32_t *reg_gpio3 = (volatile uint32_t *)0x200008d0;
+ 
+-    // wait for drive to be ready
++    // USB-only diagnostic: the Primer 25K's 26 MHz clock currently leaves the
++    // SD mount call stuck, so bypass it to observe USB attach/enumeration.
+     uint64_t start = bflb_mtimer_get_time_ms();
+     FRESULT res;
+-    overlay_status("Mounting sd card...", drv);
+-    while ((res = f_mount(&fs, "sd:", 1)) != FR_OK && bflb_mtimer_get_time_ms() - start < 500)
++    overlay_status("Skipping SD; mounting USB directly...");
++    drv = "usb:";
++    volatile uint32_t *const ehci = (volatile uint32_t *)0x20072010;
++    overlay_status("USB pre-mount: cmd=%08x sts=%08x intr=%08x port=%08x",
++                   ehci[0], ehci[1], ehci[2], ehci[17]);
++    while ((res = f_mount(&fs, "usb:", 1)) != FR_OK && bflb_mtimer_get_time_ms() - start < 2000)
+         delay(100);
+-
+-    if (res == FR_OK) {
+-        overlay_status("SD card mounted in %d ms", bflb_mtimer_get_time_ms() - start);
+-    } else  {
+-        overlay_status("SD mount failed (%d). USB...", res);
+-        drv = "usb:";
+-        start = bflb_mtimer_get_time_ms();
+-        while ((res = f_mount(&fs, "usb:", 1)) != FR_OK && bflb_mtimer_get_time_ms() - start < 2000)
+-            delay(100);
+-        if (res != FR_OK) {
+-            overlay_status("USB mount failed (FRESULT=%d)", res);
+-        } else {
+-            overlay_status("USB drive mounted in %d ms", bflb_mtimer_get_time_ms() - start);
+-        }
++    if (res != FR_OK) {
++        overlay_status("USB mount failed (FRESULT=%d)", res);
++        overlay_status("USB post-fail: cmd=%08x sts=%08x intr=%08x port=%08x",
++                       ehci[0], ehci[1], ehci[2], ehci[17]);
++    } else {
++        overlay_status("USB drive mounted in %d ms", bflb_mtimer_get_time_ms() - start);
+     }
+ 
+     // load monitor core at startup
+     string fname;
+     if (find_core_for_board(fname, "monitor.bin")) {
+         fpga_program(fname.c_str());
++        delay(300);
++        run_usb_uart_diagnostic();
++        f_unlink("usb:rom-diagnostic.txt");
++        controller_diagnostic_start();
+     } else {
+         overlay_status("No monitor.bin found for board.");
+     }
+@@ -595,7 +854,8 @@ int main(void)
+ 
+     // Initializing USB host...
+     overlay_status("Initializing USB host...");
+-    usbh_initialize();
++    int usbh_result = usbh_initialize();
++    overlay_status("USB host init result=%d", usbh_result);
+     fatfs_usbh_driver_register();
+     usb_gamepad_init();
+ 
+diff --git a/ui/overlay.cpp b/ui/overlay.cpp
+index 835a1bf..fe7ce8f 100644
+--- a/ui/overlay.cpp
++++ b/ui/overlay.cpp
+@@ -36,13 +36,16 @@ void dprint(const char *fmt, ...) {
+     vsnprintf(buf, sizeof(buf), fmt, args);
+     va_end(args);
+ 
+-    taskENTER_CRITICAL();
++#ifndef TANG_PRIMER25K
+     int len = strlen(buf);
+-    fpga_tx_header(0x0d, len+1);
++    taskENTER_CRITICAL();
++    fpga_tx_header(0x0d, len+2);
+     for(int i = 0; i < len; i++) {
+         fpga_tx_byte(buf[i]);
+     }
++    fpga_tx_byte(0);
+     taskEXIT_CRITICAL();
++#endif
+     debug_uart_log(buf);
+ }
+ 
+@@ -55,10 +58,11 @@ void overlay_printf(const char *fmt, ...) {
+ 
+     taskENTER_CRITICAL();
+     int len = strlen(buf);
+-    fpga_tx_header(0x05, len+1);
++    fpga_tx_header(0x05, len+2);
+     for(int i = 0; i < len; i++) {
+         fpga_tx_byte(buf[i]);
+     }
++    fpga_tx_byte(0);
+     taskEXIT_CRITICAL();
+ }
+ 
+@@ -81,10 +85,11 @@ void overlay_status(const char *fmt, ...) {
+     overlay_cursor(1, 27);
+     taskENTER_CRITICAL();
+     int len = strlen(buf);
+-    fpga_tx_header(0x05, len+1);
++    fpga_tx_header(0x05, len+2);
+     for(int i = 0; i < len; i++) {
+         fpga_tx_byte(buf[i]);
+     }
++    fpga_tx_byte(0);
+     taskEXIT_CRITICAL();
+     debug_uart_log(buf);
+ }
+diff --git a/usb/usb_config.h b/usb/usb_config.h
+index 81a5c3b..9abdb3d 100644
+--- a/usb/usb_config.h
++++ b/usb/usb_config.h
+@@ -17,7 +17,7 @@
+ #define usb_free(ptr)    free(ptr)
+ 
+ #ifndef CONFIG_USB_DBG_LEVEL
+-#define CONFIG_USB_DBG_LEVEL USB_DBG_INFO
++#define CONFIG_USB_DBG_LEVEL USB_DBG_LOG
+ #endif
+ 
+ /* Enable print with color */
+@@ -162,7 +162,7 @@
+ 
+ #define CONFIG_USB_EHCI_HCCR_BASE       (0x20072000)
+ #define CONFIG_USB_EHCI_HCOR_BASE       (0x20072000 + 0x10)
+-// #define CONFIG_USB_EHCI_INFO_ENABLE
++#define CONFIG_USB_EHCI_INFO_ENABLE
+ #define CONFIG_USB_EHCI_HCCR_OFFSET     (0x0)
+ #define CONFIG_USB_EHCI_FRAME_LIST_SIZE 1024
+ // #define CONFIG_USB_EHCI_QH_NUM          CONFIG_USBHOST_PIPE_NUM
+diff --git a/usb/usb_gamepad.cpp b/usb/usb_gamepad.cpp
+index 52ec508..c20329b 100644
+--- a/usb/usb_gamepad.cpp
++++ b/usb/usb_gamepad.cpp
+@@ -13,6 +13,8 @@
+ 
+ #include "overlay.h"
+ 
++extern void controller_diagnostic_log(const char *format, ...);
++
+ #include <string>
+ 
+ // Uncomment this to enable on-screen debug messages
+@@ -46,6 +48,9 @@ struct hid_info_S {
+     SemaphoreHandle_t sem;
+     TaskHandle_t task_handle;    
+     hid_state_t hid_state;
++    uint8_t last_logged[MAX_REPORT_SIZE];
++    uint16_t last_logged_len;
++    uint16_t logged_reports;
+ };
+ 
+ struct xbox_info_S {
+@@ -165,6 +170,9 @@ static void usbh_update(struct usb_config *usb) {
+             bool skip = false;
+             uint16_t vendor_id = usb->hid_info[i].hid_class->hport->device_desc.idVendor;
+             uint16_t product_id = usb->hid_info[i].hid_class->hport->device_desc.idProduct;
++            controller_diagnostic_log("HID %d connected VID=%04x PID=%04x interface=%u\r\n",
++                                      i, vendor_id, product_id,
++                                      usb->hid_info[i].hid_class->intf);
+             if (vendor_id == 0x2dc8 && product_id == 0x3107) {  // 8bitdo wireless adapter
+                 skip = true;
+             }
+@@ -172,14 +180,21 @@ static void usbh_update(struct usb_config *usb) {
+             
+             // parse report descriptor ...
+             if(skip || !parse_report_descriptor(usb->hid_info[i].hid_class->report_desc, 128, &usb->hid_info[i].report, NULL)) {
++                controller_diagnostic_log("HID %d descriptor parse FAILED (skip=%d)\r\n", i, skip);
+                 usb->hid_info[i].state = STATE_FAILED;   // parsing failed, don't use
+                 return;
+             }
++            controller_diagnostic_log("HID %d descriptor OK type=%u report_size=%u report_id=%u present=%u\r\n",
++                                      i, usb->hid_info[i].report.type,
++                                      usb->hid_info[i].report.report_size,
++                                      usb->hid_info[i].report.report_id,
++                                      usb->hid_info[i].report.report_id_present);
+             
+             usb->hid_info[i].state = STATE_DETECTED;
+         }
+         
+         else if(!usb->hid_info[i].hid_class && usb->hid_info[i].state != STATE_NONE) {
++            controller_diagnostic_log("HID %d disconnected\r\n", i);
+             INFO("HID %d disconnected\n", i);
+             if (usb->hid_info[i].task_handle) {
+                 vTaskDelete( usb->hid_info[i].task_handle );
+@@ -322,6 +337,20 @@ static void usbh_hid_client_thread(void *arg) {
+             // Wait for result
+             xSemaphoreTake(hid->sem, 0xffffffffUL);
+             if(hid->nbytes > 0) {       // use first two joysticks
++                int log_len = hid->nbytes > MAX_REPORT_SIZE ? MAX_REPORT_SIZE : hid->nbytes;
++                bool changed = hid->last_logged_len != log_len ||
++                               memcmp(hid->last_logged, hid->buffer, log_len) != 0;
++                if (changed && hid->logged_reports < 128) {
++                    char raw[3 * MAX_REPORT_SIZE + 1];
++                    int used = 0;
++                    for (int i = 0; i < log_len && used < (int)sizeof(raw) - 4; i++)
++                        used += snprintf(raw + used, sizeof(raw) - used, "%02x%s",
++                                         hid->buffer[i], i + 1 == log_len ? "" : " ");
++                    controller_diagnostic_log("HID %d raw(%d): %s\r\n", hid->index, hid->nbytes, raw);
++                    memcpy(hid->last_logged, hid->buffer, log_len);
++                    hid->last_logged_len = log_len;
++                    hid->logged_reports++;
++                }
+                 hid_parse(&hid->report, &hid->hid_state, hid->buffer, hid->nbytes);
+                 if (hid->hid_state.joystick.js_index < 2) {
+                     // hid_parse(&hid->report, &hid->hid_state, hid->buffer, hid->nbytes);
+@@ -334,9 +363,42 @@ static void usbh_hid_client_thread(void *arg) {
+                         // SNES: R  L  X A RT LT DN UP ST SE Y  B
+                         // HID:            Y  B  A  X  UP DN LT RT                     
+                         // EXTRA:                ST SE       R  L
+-                        *snes = (hid_state & 1) << 7 | (hid_state & 2) << 5 | (hid_state & 4) << 3 | (hid_state & 8) << 1 |
+-                                (hid_state & 0x10) << 5 | (hid_state & 0x20) << 3| (hid_state & 0x40) >> 6 | (hid_state & 0x80) >> 6 |
+-                                (hid_extra & 0x01) << 10 | (hid_extra & 0x02) << 10 | (hid_extra & 0x10) >> 2 | (hid_extra & 0x20) >> 2;
++                        if (hid->nbytes == 6) {
++                            // This adapter's six-byte report carries the prior
++                            // button sample in byte 0 and the current sample in
++                            // byte 1. Combining them causes stale directions to
++                            // be applied together with a newly pressed button.
++                            uint8_t n64 = hid->buffer[1];
++                            uint8_t n64_x = hid->buffer[2];
++                            uint8_t n64_y = hid->buffer[3];
++                            // NES: Right Left Down Up Start Select B A
++                            *snes = ((n64 & 0x20) ? (1 << 7) : 0) |
++                                    ((n64 & 0x80) ? (1 << 6) : 0) |
++                                    ((n64 & 0x40) ? (1 << 5) : 0) |
++                                    ((n64 & 0x10) ? (1 << 4) : 0) |
++                                    ((n64 & 0x08) ? (1 << 3) : 0) |
++                                    ((n64 & 0x04) ? (1 << 2) : 0) |
++                                    ((n64 & 0x02) ? (1 << 1) : 0) |
++                                    ((n64 & 0x01) ? (1 << 0) : 0);
++                            // The adapter repeats X/Y in bytes 4/5. One copy
++                            // is sufficient; use a generous dead zone around
++                            // the observed 0x7f/0x80 center.
++                            if (n64_x < 0x40) *snes |= (1 << 6);
++                            if (n64_x > 0xc0) *snes |= (1 << 7);
++                            if (n64_y < 0x40) *snes |= (1 << 4);
++                            if (n64_y > 0xc0) *snes |= (1 << 5);
++                            if (changed)
++                                controller_diagnostic_log("HID %d N64 buttons=%02x x=%02x y=%02x nes=%02x\r\n",
++                                                          hid->index, n64, n64_x, n64_y,
++                                                          (unsigned)*snes);
++                        } else {
++                            *snes = (hid_state & 1) << 7 | (hid_state & 2) << 5 | (hid_state & 4) << 3 | (hid_state & 8) << 1 |
++                                    (hid_state & 0x10) << 5 | (hid_state & 0x20) << 3| (hid_state & 0x40) >> 6 | (hid_state & 0x80) >> 6 |
++                                    (hid_extra & 0x01) << 10 | (hid_extra & 0x02) << 10 | (hid_extra & 0x10) >> 2 | (hid_extra & 0x20) >> 2;
++                        }
++                        if (changed)
++                            controller_diagnostic_log("HID %d mapped state=%02x extra=%02x snes=%04x\r\n",
++                                                      hid->index, hid_state, hid_extra, (unsigned)*snes);
+                         xSemaphoreGive(state_mutex);
+                     } else if (hid->report.type == REPORT_TYPE_KEYBOARD) {
+                         // allow keyboard to double as a gamepad
+diff --git a/utils/debug_uart.cpp b/utils/debug_uart.cpp
+index ab1b711..81671cd 100644
+--- a/utils/debug_uart.cpp
++++ b/utils/debug_uart.cpp
+@@ -23,7 +23,7 @@ namespace {
+ // The Primer has a 26 MHz crystal, while this SDK configures mtimer as if it
+ // were 40 MHz. A requested delay therefore lasts 40/26 times as long. Request
+ // 68 timer "microseconds" to produce a physical 104.6 us bit (about 9559 baud).
+-uint32_t debug_uart_bit_us = 68;
++uint32_t debug_uart_bit_us = 104;
+ 
+ // Soak: multimeter-readable pattern. Confirmed working 2026-08-29, so off.
+ #define DEBUG_UART_SOAK 0
+diff --git a/utils/init.cpp b/utils/init.cpp
+index 5acac39..0565778 100644
+--- a/utils/init.cpp
++++ b/utils/init.cpp
+@@ -54,10 +54,10 @@ void init_gpio_and_uart() {
+     /* Set up Core control UART parameters */
+     struct bflb_uart_config_s uart1_cfg = {
+         // .baudrate = 1000000,
+-#if defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K)
++#if defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K) || defined(TANG_PRIMER25K)
+         .baudrate = 2000000,
+ #else
+-        // all other boards have 26Mhz XTAL
++        // Legacy board startup assumes 40 MHz while these boards use 26 MHz.
+         .baudrate = 2000000 * 40 / 26,
+ #endif
+         .direction = UART_DIRECTION_TXRX,
+@@ -87,6 +87,10 @@ void init_gpio_and_uart() {
+     // On Primer 25K, expose diagnostic TX on J7 pin 2 whenever TDI is idle.
+     debug_uart_init();
+ 
++    // GPIO10/11 are the FPGA control UART on Primer 25K. The generic SD setup
++    // would immediately take those pins back and leave the monitor core unable
++    // to receive menu commands.
++#ifndef TANG_PRIMER25K
+     // Initialize SD pins
+     board_sdh_gpio_init();
+     // bflb_gpio_init(gpio, GPIO_PIN_10, GPIO_FUNC_SDH | GPIO_ALTERNATE | GPIO_PULLUP | GPIO_SMT_EN | GPIO_DRV_2);  // D1
+@@ -99,4 +103,5 @@ void init_gpio_and_uart() {
+     // Set GPIO 1 (physical pin 15) to high to enable SDMMC
+     bflb_gpio_init(gpio_dev, GPIO_PIN_16, GPIO_OUTPUT | GPIO_FLOAT | GPIO_SMT_EN | GPIO_DRV_3);
+     bflb_gpio_set(gpio_dev, GPIO_PIN_16);
++#endif
+ }
+diff --git a/utils/utils.cpp b/utils/utils.cpp
+index 76cf858..cb68af5 100644
+--- a/utils/utils.cpp
++++ b/utils/utils.cpp
+@@ -1,10 +1,23 @@
+ #include "utils.h"
+ 
+ void fpga_tx_header(int cmd, int len) {
++#ifdef TANG_PRIMER25K
++    // TangCore 0.7's packaged Primer cores predate the framed protocol used by
++    // the source tree: command byte directly, with a 24-bit length only for
++    // ROM data. `len` includes the command byte in the newer API.
++    bflb_uart_putchar(uart1_dev, cmd);
++    if (cmd == 0x07) {
++        uint32_t data_len = len - 1;
++        bflb_uart_putchar(uart1_dev, data_len >> 16);
++        bflb_uart_putchar(uart1_dev, data_len >> 8);
++        bflb_uart_putchar(uart1_dev, data_len);
++    }
++#else
+     bflb_uart_putchar(uart1_dev, 0xAA);
+     bflb_uart_putchar(uart1_dev, len >> 8);
+     bflb_uart_putchar(uart1_dev, len & 0xFF);
+     bflb_uart_putchar(uart1_dev, cmd);
++#endif
+ }
+ 
+ void fpga_tx_byte(uint8_t b) {
+@@ -123,4 +136,4 @@ int16_t get_core_id(void) {
+         delay(10);
+     }
+     return -1;
+-}
+\ No newline at end of file
++}
+diff --git a/utils/utils.h b/utils/utils.h
+index 18318e7..6143ea5 100644
+--- a/utils/utils.h
++++ b/utils/utils.h
+@@ -85,7 +85,7 @@ extern void send_blank_packet(void);
+ 
+ static inline void delay(uint32_t ms)
+ {
+-#if defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K)
++#if defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K) || defined(TANG_PRIMER25K)
+     vTaskDelay(pdMS_TO_TICKS(ms));
+ #else
+     // compensate for 26MHz clock instead of 40MHz
+@@ -141,3 +141,9 @@ extern uint32_t get_core_config(void);
+ extern void set_core_config(uint32_t config);
+ 
+ extern const char *cstr_find_ignore_case(const char *str, const char *substr);
++
++// Persistent controller diagnostics on the mounted USB drive.
++extern void controller_diagnostic_start(void);
++extern void controller_diagnostic_log(const char *format, ...);
++extern void controller_diagnostic_stop(void);
++extern void storage_diagnostic_log(const char *format, ...);

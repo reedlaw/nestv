@@ -15,13 +15,13 @@ Sipeed's debugger-update wiki page — see `docs/decision-log.md`).
 | # | Step | Status |
 | - | --- | --- |
 | 1 | Verify power rails | Done (board powers, no issues) |
-| 2 | Confirm BL616 programming and UART output | **Done.** Diagnostic UART on J7 pin 2 at 9600 confirms the application runs: banner, `TangBoard: primer25k`, USB host init, and `main_task` all observed. The 2 Mbps BL616↔FPGA link is still unverified (`core_id=-1`, no core loaded) |
+| 2 | Confirm BL616 programming and UART output | **Done.** J7 `TDI` diagnostic output proved BL616 execution and exposed the 40/26 MHz clock mismatch. The 2 Mbps BL616↔FPGA link is now verified in both directions: four core-ID requests returned `11 00`, parsed as monitor core ID `0`. |
 | 3 | Confirm FPGA JTAG and configuration-flash access | Done for JTAG/SRAM programming via Gowin's Linux Programmer CLI. Configuration-flash (exFlash) write access is **not working** on Linux — see decision log |
 | 4 | Load a minimal LED/clock test bitstream | Skipped — went straight to the M3 build, which worked |
 | 5 | Validate SDRAM independently | Done — M3 build (full NES + SDRAM + HDMI + native video + DAC test outputs) SRAM-programs and runs correctly |
 | 6 | Validate HDMI with the known NESTang path | Done — confirmed NESTang boot screen renders correctly over HDMI |
-| 7 | Validate storage mounting and file reads | **Blocked on hardware.** BL616 app and USB host stack confirmed running, but nothing enumerates through an active USB-C hub (`FRESULT=3`): the Dock's USB-C is a fixed sink (`R21`/`R22`, 5.1 K on CC, no PD controller). Needs a passive USB-C OTG adapter with power pass-through — see decision log |
-| 8 | Load NESTang and run a known ROM | **Not started**, blocked on step 7 |
+| 7 | Validate storage mounting and file reads | **Done for USB.** A FAT32 USB drive mounts through a power-injection OTG splitter, and `cores/primer25k/monitor.bin` is read and programmed successfully. The earlier `FRESULT=3` was ultimately caused by incorrect 40 MHz board startup on 26 MHz hardware, not a bad drive or either tested splitter. |
+| 8 | Load NESTang and run a known ROM | **Done 2026-09-04.** TangCore loads the packaged Primer `nestang.bin`, transfers `/nes/Baseball (USA, Europe).nes`, starts the game, and accepts menu/game input from the USB-N64 adapter. |
 | 9–14 | Analog Y/C DAC, S-Video, composite validation (M4 territory) | Not started |
 
 **Bitstream used for validation:** `impl/pnr/nestv_primer25k_m3.fs`, built via
@@ -48,10 +48,10 @@ attempt to do so was reverted).
 - **M4 (analog output):** not started. No technical dependency on M5 — can
   proceed independently once desired (see decision log for the ordering
   question this raised).
-- **M5 (TangCore/storage integration):** **started 2026-08-12.** TangCore is
-  now a pinned submodule at `firmware/tangcore` and the integration boundary
-  is analysed in `docs/m5-tangcore-integration.md`. The BL616 application is
-  flashed, but execution, storage mounting, and ROM loading remain unverified.
+- **M5 (TangCore/storage integration):** **hardware bring-up substantially
+  complete as of 2026-09-04.** The BL616 application boots, USB storage mounts,
+  `monitor.bin` loads, the two-way 2 Mbps MCU/FPGA protocol works, and the menu
+  renders over HDMI. NESTang ROM loading and USB controller input now work.
   Earlier that day, a session was spent trying to get ROM loading working via
   NESTang's
   *legacy standalone* companion firmware (`firmware.bin`, written to external
@@ -63,8 +63,8 @@ The RTL side is essentially done. `rtl/core/nestang` is TangCore's NES core
 (same code, two docs-only commits later than TangCore's own pin), and the M3
 bitstream already instantiates TangCore's `iosys_bl616` with `CORE_ID(1)` on
 the correct UART pins (`B3`/`C3`). The boot screen previously seen over HDMI
-is that interface's overlay; communication with the BL616 has not been
-observed.
+is that interface's overlay. Communication with the BL616 is now confirmed in
+both directions on real hardware.
 `impl/pnr/nestv_primer25k_m3.bin` is already in the Gowin binary format
 TangCore loads. Details and evidence in `docs/m5-tangcore-integration.md`.
 
@@ -72,11 +72,36 @@ TangCore loads. Details and evidence in `docs/m5-tangcore-integration.md`.
 
 | # | Goal | Status |
 | - | --- | --- |
-| M5.0 | Stock TangCore v0.7 boots: BL616 flashed, menu over HDMI, ROM runs from TangCore's own `primer25k` cores | **BL616 flashed 2026-08-12** (see below); menu and ROM not yet observed |
-| M5.1 | Our bitstream replaces `cores/primer25k/nestang.bin` and runs a ROM | Blocked on M5.0 and on the pin conflict below |
+| M5.0 | Stock TangCore v0.7 boots: BL616 flashed, menu over HDMI, ROM runs from TangCore's own `primer25k` cores | **Done 2026-09-04**, using the compatibility firmware documented below. |
+| M5.1 | Our bitstream replaces `cores/primer25k/nestang.bin` and runs a ROM | **Next.** Copy the current NestV Primer binary to the drive as `cores/primer25k/nestang.bin`, preserving the known-good packaged file as a backup, then repeat the same ROM/controller test. |
 | M5.2 | Storage moves from USB drive to SD | Not started |
 | M5.3 | Last-game boot, Select+Start menu, suspend | Not started; needs a `firmware-bl616` fork |
 | M5.4 | Analog output and a controller coexist | Not started (M4 territory) |
+
+### Known-good M5.0 setup — resume here
+
+Validated 2026-09-04:
+
+- firmware: `build/tangcore/firmware/tangcore_primer25k_debug_uart.bin`,
+  SHA-256 `387a301ea19021a11ad2f92c0d07d72056b5c4ba32a0ac1094863987996419af`;
+- flash command: `make tangcore-flash-debug` (application at `0x40000` only;
+  never rewrite the stock partner firmware at `0x0`);
+- USB drive label/mount: `TANGCORE` / `/run/media/reed/TANGCORE`;
+- packaged cores: `cores/primer25k/monitor.bin` and `nestang.bin` from
+  TangCore 0.7; known ROM: `nes/Baseball (USA, Europe).nes`;
+- topology: splitter USB-C male to Dock; splitter charging USB-C to charger;
+  splitter USB-A data leg to the powered hub's upstream port; USB drive and
+  N64 adapter in hub downstream ports; HDMI from Dock to display;
+- result: menu navigation, ROM selection, NESTang programming, complete ROM
+  transfer, game start, and controller input all confirmed;
+- N64 mapping: D-pad and analog stick both provide directions; A/B map to NES
+  A/B; Start maps to Start; Z maps to Select. The adapter's six-byte report
+  uses byte 1 as the current button sample and bytes 2/3 as centered X/Y axes.
+
+Diagnostic files on the drive are `tangcore-diagnostic.txt`,
+`controller-diagnostic.txt`, and `rom-diagnostic.txt`. They are useful evidence
+but are not required for normal boot. The J7 debug wiring is likewise no longer
+required for the known-good workflow.
 
 ### BL616 flashing, 2026-08-12
 
@@ -99,9 +124,41 @@ enumerates as `0403:6010` (FT2232H) — the Sipeed debugger firmware mimics an
 FTDI cable so stock tools work — and `programmer_cli` read
 `GW5A-25A (0x0001281B)` and SRAM-programmed the M3 bitstream normally.
 
-Still unverified: that TangCore itself runs.
+TangCore execution is now verified; this flashing record is retained for the
+recovery details and hashes.
 
 ## Open items
+
+M5.0 is complete. The next functional milestone is M5.1: replace the packaged
+NESTang core with this repository's NestV Primer bitstream and repeat the exact
+known-good HDMI/USB/controller test. After that, resume M4 analog Y/C/composite
+work, then return to M5.2–M5.4 for internal storage, last-game boot/menu UX, and
+coexistence with the final wired NES controllers.
+
+Before upstreaming, split the current diagnostic branch into reviewable changes:
+
+- Primer BL616 26 MHz startup and true 2 Mbps UART;
+- preservation of GPIO10/GPIO11 for the FPGA control UART;
+- explicit compatibility between TangCore 0.7's legacy packaged cores and the
+  newer framed source protocol (or rebuild/package matching cores instead);
+- USB-N64 mapping only after identifying its VID/PID; do not upstream the broad
+  six-byte-report heuristic;
+- remove or separately retain the J7 UART, persistent reports, packet probes,
+  and repeated release commands as diagnostics rather than production behavior.
+
+Before treating the firmware as final, turn the successful diagnostic changes
+into a maintained Primer 25K board configuration: keep the 26 MHz startup,
+2 Mbps UART without the old 40/26 compensation, unframed FPGA response parser,
+null-terminated text commands, and GPIO10/11 UART ownership. The temporary
+USB-only mount path should remain until the Primer's SD pin conflict is resolved;
+the stock Dock has no BL616-connected SD slot.
+
+The USB diagnostic report successfully records core-ID evidence, but its first
+sector was corrupted because both the write buffer and FatFs `FIL` private sector
+buffer must live in non-cached RAM. Both are now placed there in the latest
+unflashed build; this logging-only correction does not invalidate the menu test.
+
+### Superseded investigation notes
 
 M5.0 was attempted with a USB drive and powered USB-C hub, but no HDMI menu
 appeared. Confirm that the adapter actually supplies USB host/OTG data (not
@@ -144,24 +201,14 @@ is a carrier-board item; the firmware side already works.
 
 ## Next step
 
-The listener has been the blocker, not the firmware. Use a XIAO ESP32 as the
-serial adapter via `scripts/uart_bridge_esp32/` — set `SELFTEST 1` and jumper
-`D6`->`D7` first to prove the receive path independently, then set it back to 0
-and connect the Dock. The XIAO Debug Mate's UART Monitor was tried and could
-not be made to decode anything in Grove mode.
-
-Flash the diagnostic build (`make tangcore-flash-debug`), wire J7 pin 2 to the
-ESP32's `D7` and J7 pin 6 to its ground, open the USB serial monitor, and power
-the Dock from a plain charger with nothing else attached.
-
-- `[debug] heartbeat 0, 1, 2…` → the BL616 runs TangCore; the mount messages
-  that follow say exactly where it stops.
-- silence → the app at `0x40000` never starts, and the secondary-boot chain is
-  the fault, not storage.
-
-Note that LED evidence alone cannot settle this: `main_task` mounts media before
-it calls `fpga_program()`, so DONE stays dark whether TangCore is running
-perfectly with no media or not running at all.
+Start with M5.1. Back up the drive's known-good
+`cores/primer25k/nestang.bin`, replace it with the current NestV Primer binary
+`impl/pnr/nestv_primer25k_m3.bin` (SHA-256
+`dcbef074ebea5c508c5314e55f26db0d67991836ff08299c94478d2586c056db`)
+in Gowin `.bin` format, and boot using the unchanged working firmware/topology.
+Select `Baseball (USA, Europe).nes` and verify HDMI video plus N64 D-pad, analog
+stick, A, B, Start, and Z-as-Select in game. If that passes, record the exact
+bitstream hash and mark M5.1 done before beginning analog-output integration.
 
 Do not reflash `0x0`: it already matches the stock partner firmware, and the
 project flash script deliberately skips it.

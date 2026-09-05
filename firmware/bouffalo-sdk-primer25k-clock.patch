@@ -1,0 +1,26 @@
+diff --git a/bsp/board/bl616dk/board.c b/bsp/board/bl616dk/board.c
+index c6fb7e60..86999f4f 100644
+--- a/bsp/board/bl616dk/board.c
++++ b/bsp/board/bl616dk/board.c
+@@ -41,7 +41,7 @@ static void system_clock_init(void)
+ {
+ #if 1
+     /* wifipll/audiopll */
+-    GLB_Power_On_XTAL_And_PLL_CLK(GLB_XTAL_40M, GLB_PLL_WIFIPLL | GLB_PLL_AUPLL);
++    GLB_Power_On_XTAL_And_PLL_CLK(GLB_XTAL_26M, GLB_PLL_WIFIPLL | GLB_PLL_AUPLL);
+     GLB_Set_MCU_System_CLK(GLB_MCU_SYS_CLK_TOP_WIFIPLL_320M);
+ #else
+     GLB_Set_MCU_System_CLK(GLB_MCU_SYS_CLK_RC32M);
+diff --git a/bsp/board/bl616dk/fw_header.c b/bsp/board/bl616dk/fw_header.c
+index 0358cbb7..4d776cf0 100644
+--- a/bsp/board/bl616dk/fw_header.c
++++ b/bsp/board/bl616dk/fw_header.c
+@@ -86,7 +86,7 @@ __attribute__((section(".fw_header"))) struct bootheader_t fw_header = {
+     .flash_cfg.crc32 = 0xdeadbeef,
+     /* clock cfg */
+     .clk_cfg.magiccode = 0x47464350,
+-    .clk_cfg.cfg.xtal_type = 0x07,      /*!< 0:None,1:24M,2:32M,3:38.4M,4:40M,5:26M,6:RC32M  */
++    .clk_cfg.cfg.xtal_type = 0x05,      /*!< 0:None,1:24M,2:32M,3:38.4M,4:40M,5:26M,6:RC32M  */
+     .clk_cfg.cfg.mcu_clk = 0x05,        /*!< mcu_clk 0:RC32M;1:XTAL;2:aupll_div2;3:aupll_div1;4:wifipll_240M;5:wifipll_320M */
+     .clk_cfg.cfg.mcu_clk_div = 0x00,    /*!< mcu_clk divider */
+     .clk_cfg.cfg.mcu_bclk_div = 0x00,   /*!< mcu_bclk divider */
