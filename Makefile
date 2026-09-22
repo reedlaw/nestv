@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: all bootstrap lint test test-m2 test-m4 model-test menu-test check wave wave-open export-yc validate-m1 validate-m2 preview-menu synth-primer25k program-sram tangcore-fetch tangcore-flash tangcore-flash-debug tangcore-build-source tangcore-flash-source test-tangcore-source clean
+.PHONY: all bootstrap lint test test-m2 test-m4 model-test menu-test check wave wave-open export-yc validate-m1 validate-m2 preview-menu synth-primer25k program-sram tangcore-fetch tangcore-flash tangcore-flash-debug tangcore-build-source tangcore-flash-source tangcore-install-media test-tangcore-source clean
 
 all: check
 
@@ -58,7 +58,11 @@ test-tangcore-source:
 tangcore-build-source:
 	python3 scripts/build_tangcore_source.py $(TANGCORE_BUILD_ARGS)
 
-tangcore-flash-source: tangcore-fetch
+tangcore-install-media:
+	python3 scripts/install_tangcore_media.py --package "$(SOURCE_PACKAGE)" --media "$(MEDIA_DIR)"
+
+tangcore-flash-source:
+	APP=source ./scripts/fetch_tangcore_release.sh
 	APP=source ./scripts/flash_bl616_tangcore.sh
 
 tangcore-fetch:

@@ -6,9 +6,16 @@ bring-up progresses — `PROJECT.md` should stay a stable plan.
 
 ## Hardware on hand
 
+See [hardware purchases and inventory](hardware-inventory.md) for the existing
+Seeed order, the second test-harness order, and accessories still undecided.
+The Grove Base for XIAO is already owned.
+
 Tang Primer 25K SoM + Dock, Tang SDRAM module, PMOD-DVI, PMOD-TF Card.
 Debugger firmware serial `2025030317` (current as of 2026-08, confirmed via
 Sipeed's debugger-update wiki page — see `docs/decision-log.md`).
+
+See the [development build and hardware-test log](dev-log.md) for exact
+known-good artifacts and the subsequent source-package hardware failure.
 
 ## Status against §12 bring-up sequence
 

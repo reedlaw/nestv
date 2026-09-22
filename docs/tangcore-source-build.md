@@ -103,15 +103,34 @@ their current constraints; this is not a complete board-level timing audit.
 The six package-integrity tests pass, including rejection of replaced cores,
 missing files, incomplete packages, and the legacy protocol.
 
-**This source package has not been flashed or tested on hardware.** The working
+**Hardware test on 2026-09-05 failed: black screen with repeated DONE LED
+activity, including after both installed core hashes were confirmed correct.**
+The user flashed the source firmware using `make tangcore-flash-source`.
+No fresh drive logs were available; this build omits the diagnostic loggers.
+Root cause remains unknown. See the [development log](dev-log.md) for the
+exact artifacts and test evidence. The working
 v0.7 FPGA images and diagnostic application under `build/tangcore/` remain the
 recovery baseline. Its original application SHA-256 is
 `387a301ea19021a11ad2f92c0d07d72056b5c4ba32a0ac1094863987996419af`.
 
-For the next hardware session, back up the USB drive's two known-good core
-files and copy both files from the new package's `media/cores/primer25k/` into
-`cores/primer25k/` on the drive. Keep the same ROM, hub, power splitter and
-controller. With the BL616 in ISP mode, the corresponding application can be
+For the next hardware session, install the matching cores with:
+
+```sh
+make tangcore-install-media \
+  SOURCE_PACKAGE="$PWD/build/tangcore-source/primer/package" \
+  MEDIA_DIR=/run/media/reed/TANGCORE
+```
+
+`MEDIA_DIR` must be the mounted drive root and must already contain both
+`cores/primer25k/monitor.bin` and `nestang.bin`. The task verifies the source
+package, copies and verifies both existing files into a unique timestamped
+`nestv-backups/` directory on the drive, stages both replacements, then installs
+and checks them. Ordinary installation errors restore any replaced files from
+the backup. Each file replacement is atomic, but the pair is not atomic across
+power loss; if interrupted, restore both files from the printed backup path.
+ROMs and other files are left alone. Eject the drive before unplugging it.
+
+Keep the same ROM, hub, power splitter and controller. With the BL616 in ISP mode, the corresponding application can be
 flashed using:
 
 ```sh

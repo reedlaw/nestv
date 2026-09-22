@@ -21,8 +21,10 @@ Primer LEDs and a 50 MHz input constraint. Both report zero total negative
 setup/hold slack under the current constraints. BL616 builds pass with the
 N64 workaround enabled and disabled. Package-integrity checks pass.
 
-The package is not hardware-validated. Test it as a matching set before
-substituting NesTV's M3 image. See [source build record](tangcore-source-build.md).
+The matching package failed its 2026-09-05 hardware test with a black screen
+and repeated DONE LED activity. Installed core hashes were verified after the
+retry. Root cause is unresolved; do not substitute NesTV's M3 image yet.
+See the [development log](dev-log.md). See [source build record](tangcore-source-build.md).
 
 ## 2026-09-04 — M5.0 menu works; firmware mismatches were the root cause
 

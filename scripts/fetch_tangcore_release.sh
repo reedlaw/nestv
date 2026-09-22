@@ -42,6 +42,15 @@ cp "$src/cores/primer25k/monitor.bin" "$src/cores/primer25k/nestang.bin" \
 
 rm -rf "$out/extract"
 
+if [ "${APP:-stock}" = source ]; then
+    cat <<EOF
+
+Prepared v0.7 recovery files and the stock partner image under $out.
+These are recovery files, not the media for this source-firmware test.
+Use the matching source package for both cores:
+  make tangcore-install-media SOURCE_PACKAGE="${SOURCE_PACKAGE:-<source-package>}" MEDIA_DIR=<mounted-drive>
+EOF
+else
 cat <<EOF
 
 BL616 images     $out/firmware
@@ -54,3 +63,4 @@ Media tree       $out/media
 
 Next: scripts/flash_bl616_tangcore.sh
 EOF
+fi

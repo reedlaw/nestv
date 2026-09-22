@@ -2,7 +2,11 @@
 /impl/
 /.tools/
 /Gowin_V*_linux.tar.gz
+/programmer*.Linux.x86.tar.gz
+/tangcore-boot.log
 *.vcd
 *.fst
 __pycache__/
 *.pyc
+/firmware/esp32_relay_test/.pio/
+/.local/esp32-relay-ota.json

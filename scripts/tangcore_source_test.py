@@ -5,6 +5,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+import os
+
+from install_tangcore_media import install
 
 from build_tangcore_source import verify_package
 
@@ -56,6 +60,51 @@ class PackageIntegrityTest(unittest.TestCase):
         self.save()
         with self.assertRaisesRegex(RuntimeError, 'Not a complete'):
             verify_package(self.root)
+
+    def media(self):
+        media = self.root / 'drive'
+        cores = media / 'cores/primer25k'
+        cores.mkdir(parents=True)
+        for name in ('monitor.bin', 'nestang.bin'):
+            (cores / name).write_bytes(b'previous-' + name.encode())
+        (media / 'game.nes').write_bytes(b'keep ROM')
+        return media
+
+    def test_media_install_preserves_backup_and_rom(self):
+        media = self.media()
+        with patch('install_tangcore_media.os.sync'):
+            backup = install(self.root, media)
+        for name in ('monitor.bin', 'nestang.bin'):
+            self.assertEqual((backup / name).read_bytes(), b'previous-' + name.encode())
+            self.assertEqual((media / 'cores/primer25k' / name).read_bytes(),
+                             (self.root / 'media/cores/primer25k' / name).read_bytes())
+        self.assertEqual((media / 'game.nes').read_bytes(), b'keep ROM')
+
+    def test_invalid_package_does_not_touch_media(self):
+        media = self.media()
+        (self.root / 'media/cores/primer25k/nestang.bin').write_bytes(b'corrupt')
+        with self.assertRaises(RuntimeError):
+            install(self.root, media)
+        self.assertFalse((media / 'nestv-backups').exists())
+        self.assertEqual((media / 'cores/primer25k/monitor.bin').read_bytes(), b'previous-monitor.bin')
+
+    def test_second_replacement_failure_restores_first(self):
+        media = self.media()
+        real_replace = os.replace
+        calls = 0
+
+        def fail_second(source, destination):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError('simulated write failure')
+            real_replace(source, destination)
+
+        with patch('install_tangcore_media.os.sync'), patch('install_tangcore_media.os.replace', side_effect=fail_second):
+            with self.assertRaisesRegex(OSError, 'simulated write failure'):
+                install(self.root, media)
+        for name in ('monitor.bin', 'nestang.bin'):
+            self.assertEqual((media / 'cores/primer25k' / name).read_bytes(), b'previous-' + name.encode())
 
 
 if __name__ == '__main__':
